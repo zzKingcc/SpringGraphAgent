@@ -1,8 +1,8 @@
-package com.zxcSpringAI.controller;
+package com.zxcSpringAI.agent.controller;
 
-import com.zxcSpringAI.aiService.AgentOrchestrationService;
-import com.zxcSpringAI.memory.CancellationTracker;
-import com.zxcSpringAI.util.InputSanitizer;
+import com.zxcSpringAI.agent.service.AgentOrchestrationService;
+import com.zxcSpringAI.common.util.InputSanitizer;
+import com.zxcSpringAI.infrastructure.memory.CancellationTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;

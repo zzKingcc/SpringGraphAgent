@@ -88,7 +88,10 @@ START → agent 节点 → 条件路由（三路分流）
 
 ```
 com.zxcSpringAI
+├── SpringRagApplication.java  ← 启动类
+│
 ├── agent/                 ← 编排层（未来搬入 stringer-server + stringer-core）
+│   ├── controller/        TestController 入口控制器
 │   ├── config/            AgentOrchestrationConfig, AiPromptProperties
 │   ├── router/            ToolRouter 统一工具调用入口
 │   ├── service/           AgentOrchestrationService 调度中枢
@@ -100,6 +103,7 @@ com.zxcSpringAI
 ├── common/                ← 公共层（未来搬入 stringer-core）
 │   ├── annotation/        @RequireApproval（未来加入 @StringerStep 系列）
 │   ├── exception/         KnowledgeBaseException, ChatMemoryException + GlobalExceptionHandler
+│   ├── spi/              扩展点接口占位（ToolProvider, CheckpointSaver, ChatMemoryStore, ContentRetriever, ToolExecutionInterceptor）
 │   └── util/              InputSanitizer, TokenUsageTracker
 │
 └── infrastructure/        ← 基础设施层（未来 stringer-server 可替换 SPI 实现）
@@ -110,8 +114,6 @@ com.zxcSpringAI
     ├── splitter/          ChineseArticleDocumentSplitter 中文文章分段
     └── util/              DocumentIngestor, VectorStoreUtil
 ```
-
-> 注：`aiService/`、`config/`、`exception/`、`memory/`、`processor/`、`retriever/`、`splitter/`、`tools/`、`util/`、`model/` 是**未迁移的旧包**，功能已和新包重复，Phase 1 计划将清理它们。
 
 ## 技术栈
 
@@ -256,7 +258,7 @@ agent 节点通过 `StreamingChatModel.chat()` 流式生成，每个 chunk 实�
                               版本回滚 / 任务历史回放
 ```
 
-- **Phase 1**：代码基线收敛（包分层统一、清理重复旧包、编译通过）
+- **Phase 1**：代码基线收敛（包分层已统一、旧包已清理、SPI 扩展点已占位）
 - **Phase 2**：Maven 多模块拆分，发布 `stringer-spring-boot-starter` 第一版
 - **Phase 3**：Stringer 中心平台后端（API + 调度引擎 + 审批流 + 检查点）
 - **Phase 4**：中心平台前端（运行观测 + 人工审批页 + 流程图展示）
