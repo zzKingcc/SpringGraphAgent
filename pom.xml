@@ -12,21 +12,38 @@
     </parent>
 
     <groupId>com.zxc</groupId>
-    <artifactId>springAI-Langchain-Agent</artifactId>
+    <artifactId>springAI-rag</artifactId>
     <version>1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>springAI-rag (Stringer)</name>
+    <description>Java-based AI Workflow Orchestration Starter - 多模块聚合工程</description>
+
+    <modules>
+        <module>stringer-core</module>
+        <module>stringer-common</module>
+        <module>stringer-retrieval</module>
+        <module>stringer-infrastructure</module>
+        <module>stringer-capability</module>
+        <module>stringer-agent</module>
+        <module>stringer-server</module>
+        <module>stringer-spring-boot-starter</module>
+        <module>stringer-example</module>
+    </modules>
 
     <properties>
+        <java.version>21</java.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <spring.boot.version>3.5.7</spring.boot.version>
+        <stringer.version>1.0-SNAPSHOT</stringer.version>
         <langchain4j.version>1.18.1</langchain4j.version>
-        <elasticsearch.version>9.4.4</elasticsearch.version>
         <langgraph4j.version>1.8.17</langgraph4j.version>
+        <elasticsearch.version>9.4.4</elasticsearch.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!-- LangChain4j BOM -->
             <dependency>
                 <groupId>dev.langchain4j</groupId>
                 <artifactId>langchain4j-bom</artifactId>
@@ -34,6 +51,7 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- LangGraph4j BOM -->
             <dependency>
                 <groupId>org.bsc.langgraph4j</groupId>
                 <artifactId>langgraph4j-bom</artifactId>
@@ -41,81 +59,65 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+
+            <!-- 强制锁定 ES 客户端版本（langchain4j-bom 解析的版本与 ES 服务器 9.4.4 不一致） -->
+            <dependency>
+                <groupId>co.elastic.clients</groupId>
+                <artifactId>elasticsearch-java</artifactId>
+                <version>${elasticsearch.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.elasticsearch.client</groupId>
+                <artifactId>elasticsearch-rest-client</artifactId>
+                <version>${elasticsearch.version}</version>
+            </dependency>
+
+            <!-- ===== 内部模块版本管理 ===== -->
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-core</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-common</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-retrieval</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-infrastructure</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-capability</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-agent</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-server</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-spring-boot-starter</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zxc</groupId>
+                <artifactId>stringer-example</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
-
-    <dependencies>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-aop</artifactId>
-        </dependency>
-        <!--    引入webFlux依赖依赖    -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-webflux</artifactId>
-        </dependency>
-        <!--    引入langchain4j依赖（版本由BOM统一管理）    -->
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-spring-boot-starter</artifactId>
-        </dependency>
-        <!--    引入reactor依赖    -->
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-reactor</artifactId>
-        </dependency>
-        <!--    引入easy-rag依赖    -->
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-easy-rag</artifactId>
-        </dependency>
-        <!--    引入Elasticsearch向量存储依赖    -->
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-elasticsearch</artifactId>
-        </dependency>
-        <!--    引入LangGraph4j图编排引擎    -->
-        <dependency>
-            <groupId>org.bsc.langgraph4j</groupId>
-            <artifactId>langgraph4j-core</artifactId>
-        </dependency>
-        <!--    引入LangGraph4j与LangChain4j集成模块（提供ChatMessage/ToolExecutionRequest自定义序列化器）    -->
-        <dependency>
-            <groupId>org.bsc.langgraph4j</groupId>
-            <artifactId>langgraph4j-langchain4j</artifactId>
-        </dependency>
-
-        <!--    强制锁定ES客户端版本（BOM解析的版本与langchain4j-elasticsearch声明不一致）    -->
-        <dependency>
-            <groupId>co.elastic.clients</groupId>
-            <artifactId>elasticsearch-java</artifactId>
-            <version>${elasticsearch.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.elasticsearch.client</groupId>
-            <artifactId>elasticsearch-rest-client</artifactId>
-            <version>${elasticsearch.version}</version>
-        </dependency>
-
-        <!--    引入lombok依赖    -->
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-        </dependency>
-
-        <!--   引入redis     -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
-        </dependency>
-
-    </dependencies>
 </project>

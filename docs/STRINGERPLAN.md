@@ -19,9 +19,11 @@
 
 ---
 
-## Phase 1：代码基线收敛
+## Phase 1：代码基线收敛（✅ 已完成）
 
 **目标**：把现在的单模块 Spring Boot 项目清理干净，为拆多模块打好基础。不做新功能，只做"去重 + 统一 + 验证"。
+
+> 注：下表"新位置"为 Phase 1 四层包（`agent/capability/common/infrastructure`）；Phase 2 已在四层之上进一步拆为 9 个 Maven 模块，包名统一为 `com.zxc.stringer.*`（见下方 Phase 2 目录结构）。
 
 | 项目 | 内容 |
 |---|---|
@@ -71,67 +73,41 @@
 
 ## Phase 2：Maven 多模块拆分 + Starter 第一版
 
-**目标**：从单模块拆成 4 个子模块，发布客户能用的 `stringer-spring-boot-starter` 第一版。
+**目标**：从单模块拆成 9 个子模块（已拆分完成），发布客户能用的 `stringer-spring-boot-starter` 第一版。
 
 | 项目 | 内容 |
 |---|---|
 | 工期 | ~ 3 周 |
-| 依赖 | Phase 1 验收通过 |
-| 核心动作 | 根 pom 改造 → 4 个子模块 pom → 代码搬迁 → Starter 注解 + 自动装配 |
+| 依赖 | Phase 1 验收通过（✅ 已完成） |
+| 核心动作 | 根 pom 改造 → 9 个子模块 pom → 代码搬迁 → **Starter 注解 + 自动装配（进行中）** |
 
 ### 交付物清单
 
-1. **多模块目录结构**（物理创建文件夹 + pom）
+1. **多模块目录结构**（✅ 已落地为 9 模块，包名统一 `com.zxc.stringer.*`）
 
 ```
-d:\agent\
-├── pom.xml                         ← 根 pom（packaging=pom，只放 dependencyManagement）
-├── stringer-core\                   ← 零 Spring 依赖
-│   ├── pom.xml
+springAI-rag\
+├── pom.xml                         ← 根 pom（packaging=pom，继承 spring-boot-starter-parent + dependencyManagement）
+├── stringer-core\                  ← 纯 Java 契约（仅依赖 langchain4j-core，零 Spring）
 │   └── src\main\java\com\zxc\stringer\core\
-│       ├── annotation\
-│       │   ├── @StringerStep            ★ 新建
-│       │   ├── @StringerInput           ★ 新建
-│       │   ├── @StringerOutput          ★ 新建
-│       │   ├── @StringerOnCompletion    ★ 新建
-│       │   └── @RequireApproval         （从 common.annotation 搬过来）
-│       ├── spi\
-│       │   ├── ToolProvider.java       ★ SPI 接口
-│       │   ├── CheckpointSaver.java    ★ SPI 接口
-│       │   ├── ChatMemoryStore.java    ★ SPI 接口
-│       │   └── ContentRetriever.java   ★ SPI 接口
-│       └── model\
-│           ├── StepDefinition.java     ★ POJO：步骤定义上报
-│           ├── WorkflowRun.java        ★ POJO：工作流运行记录
-│           └── ToolExecutionEvent.java ★ POJO：工具执行事件
-│
-├── stringer-spring-boot-starter\   ← ★ 客户引入的 Starter
-│   ├── pom.xml（依赖 stringer-core + spring-boot-autoconfigure）
-│   └── src\main\
-│       ├── java\com\zxc\stringer\starter\
-│       │   ├── StringerAutoConfiguration.java    ★ @AutoConfiguration
-│       │   ├── StringerProperties.java           ★ @ConfigurationProperties("stringer")
-│       │   ├── StringerAnnotationScanner.java    ★ BeanPostProcessor：扫描 @StringerStep 上报
-│       │   └── StringerClient.java               ★ HTTP 客户端：上报中心平台
-│       └── resources\META-INF\spring\
-│           └── org.springframework.boot.autoconfigure.AutoConfiguration.imports  ★ Spring Boot 3 自动装配
-│
-├── stringer-server\                 ← 中心平台后端（现在的主要代码）
-│   ├── pom.xml（继承根 pom，依赖 stringer-core + 中间件）
-│   └── src\main\java\com\zxcSpringAI\...   ← 现在 agent/capability/common/infrastructure + controller + SpringRagApplication
-│
-└── stringer-example\                ← 示例项目
-    ├── pom.xml（只依赖 stringer-spring-boot-starter）
-    └── src\main\java\demo\
-        └── MyBusinessSteps.java    ← 3-5 个 @StringerStep 示例方法
+│       ├── annotation\             @RequireApproval（未来 @StringerStep 系列）
+│       └── spi\                    ToolProvider / CheckpointSaver / ChatMemoryStore / ContentRetriever / ToolExecutionInterceptor
+├── stringer-common\                ← 公共支撑：exception + util（InputSanitizer/TokenUsageTracker）
+├── stringer-retrieval\             ← 混合检索（ES 向量 script_score + BM25 + 分数融合）
+├── stringer-infrastructure\        ← memory / checkpoint / ingestion（记忆、断点、文档导入）
+├── stringer-capability\            ← 业务能力（RagService / WeatherService）
+├── stringer-agent\                 ← web / orchestration / tools / cancellation（Agent 运行时闭环）
+├── stringer-server\                ← 中心平台/可运行服务：config 装配 + 启动类 + resources
+├── stringer-spring-boot-starter\   ← ★ 客户引入的 Starter（骨架，待填自动装配）
+└── stringer-example\               ← 示例项目（骨架）
 ```
 
-2. **根 pom（核心要点）**
-   - `<packaging>pom</packaging>`，不再继承 `spring-boot-starter-parent`（改为用 dependencyManagement import 的方式）
-   - `<modules>` 声明 4 个子模块
-   - 统一管理所有依赖版本：`spring-boot-dependencies` BOM、`langchain4j-bom`、`langgraph4j-bom`、自己的 4 个模块版本
+2. **根 pom（核心要点）**（✅ 已实现）
+   - `<packaging>pom</packaging>`，继承 `spring-boot-starter-parent`（版本/插件由父 POM 统一），`<modules>` 声明 9 个子模块
+   - `dependencyManagement` 统一管理：`langchain4j-bom`、`langgraph4j-bom`、ES 客户端版本锁定（9.4.4，与服务器一致）、9 个内部模块版本
+   - 构建顺序：core → common → retrieval → infrastructure → capability → agent → server → starter → example（前序 install 成功才能 build 后序）
 
-3. **Starter 最小可用功能**（MVP，不追求完美）
+3. **Starter 最小可用功能**（🔄 进行中：模块骨架已建，`StringerAutoConfiguration`/`@StringerStep` 待填）
    - `StringerProperties` 能读取 `application.yaml` 里的 `stringer.server-url` 和 `stringer.api-key`
    - `StringerAnnotationScanner`：Spring 启动时扫描所有 Bean 的方法，找到 `@StringerStep`，打印出所有步骤名 + 参数签名（先用 console 打日志，中心平台 API 在 Phase 3 再做）
    - `stringer-example` 项目启动后，控制台能看到扫描到的步骤列表
@@ -146,8 +122,9 @@ d:\agent\
 
 ### 验收标准
 
-- [ ] 根目录 `mvn clean install` 一次通过，4 个子模块按顺序构建
-- [ ] `stringer-core` 的 jar 大小 < 500KB（证明没有 Spring 依赖混进去）
+- [x] 根目录 `mvn clean install` 一次通过，9 个子模块按顺序构建（✅ 已验证）
+- [x] `stringer-core` 的 jar 大小 < 500KB（证明没有 Spring 依赖混进去）（✅ 仅依赖 langchain4j-core）
+- [x] 启动 `stringer-server`，`/test/agent` 接口全流程回归通过（✅ 对话/知识库检索/checkpoint 正常）
 - [ ] 进入 `stringer-example` 目录，`mvn spring-boot:run` 启动后控制台能打印出 "Stringer: scanned N steps: ..." 日志
 - [ ] 解包 `stringer-spring-boot-starter-1.0-SNAPSHOT.jar`，确认包含 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 文件
 

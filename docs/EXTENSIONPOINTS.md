@@ -171,9 +171,9 @@ public @interface StringerOnCompletion {
 }
 ```
 
-### 2.5 @RequireApproval — 已有注解，合并进 stringer-core
+### 2.5 @RequireApproval — 已有注解，已并入 stringer-core
 
-你现在的 `com.zxcSpringAI.common.annotation.RequireApproval` 搬到 `com.zxc.stringer.core.annotation.RequireApproval`，和 `@StringerStep(requireApproval = true)` 等价，两种写法都支持。
+原 `com.zxcSpringAI.common.annotation.RequireApproval` 已搬迁到 `com.zxc.stringer.core.annotation.RequireApproval`（✅ 完成），和 `@StringerStep(requireApproval = true)` 等价，两种写法都支持。
 
 ---
 
