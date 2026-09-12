@@ -6,7 +6,7 @@
 
     <parent>
         <groupId>com.zxc</groupId>
-        <artifactId>springAI-rag</artifactId>
+        <artifactId>Stringer</artifactId>
         <version>1.0-SNAPSHOT</version>
     </parent>
 

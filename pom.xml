@@ -12,10 +12,10 @@
     </parent>
 
     <groupId>com.zxc</groupId>
-    <artifactId>springAI-rag</artifactId>
+    <artifactId>Stringer</artifactId>
     <version>1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
-    <name>springAI-rag (Stringer)</name>
+    <name>Stringer</name>
     <description>Java-based AI Workflow Orchestration Starter - 多模块聚合工程</description>
 
     <modules>

@@ -38,3 +38,8 @@ build/
 /src/main/resources/doc/
 /src/main/resources/myPropertise/
 
+###  application.yaml  ###
+*.yaml
+*.yml
+
+
