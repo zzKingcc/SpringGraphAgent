@@ -5,113 +5,157 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.zxc</groupId>
+        <groupId>com.zzkingcc</groupId>
         <artifactId>Stringer</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>0.1.0</version>
     </parent>
 
     <artifactId>stringer-server</artifactId>
     <name>stringer-server</name>
-    <description>Stringer 中心平台/可运行服务：配置装配 + 启动类 + 全部运行资源</description>
+    <description>Stringer 服务端（可独立部署）：承载 Agent 编排 / 知识库 / 工具调用 / ES / Redis，暴露 HTTP + SSE 供客户端 starter 连接</description>
 
     <dependencies>
+        <!-- ===== 内部模块（服务端承载全部重逻辑） ===== -->
         <dependency>
-            <groupId>com.zxc</groupId>
-            <artifactId>stringer-core</artifactId>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-api</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.zxc</groupId>
+            <groupId>com.zzkingcc</groupId>
             <artifactId>stringer-common</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.zxc</groupId>
-            <artifactId>stringer-retrieval</artifactId>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-domain</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.zxc</groupId>
+            <groupId>com.zzkingcc</groupId>
             <artifactId>stringer-infrastructure</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.zxc</groupId>
-            <artifactId>stringer-capability</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.zxc</groupId>
-            <artifactId>stringer-agent</artifactId>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-runtime</artifactId>
         </dependency>
 
-        <!-- Spring Boot Web + AOP -->
+        <!-- ===== Spring Boot 装配 ===== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-aop</artifactId>
-        </dependency>
-
-        <!-- Redis -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+        <!-- Lettuce 连接池（spring-boot-starter-data-redis 中为 optional，需显式引入） -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
 
-        <!-- LangChain4j 集成（OpenAI 兼容模型 + Spring Starter + EasyRAG） -->
+        <!-- ===== LangChain4j 集成 ===== -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
+            <artifactId>langchain4j-core</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+        <!-- OpenAI 模型（核心库，无 spring-boot 自动装配；模型 Bean 由 AiModelConfiguration 构建） -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>${langchain4j.version}</version>
         </dependency>
         <dependency>
             <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-spring-boot-starter</artifactId>
+            <artifactId>langchain4j</artifactId>
+            <version>${langchain4j.version}</version>
         </dependency>
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-reactor</artifactId>
+            <version>${langchain4j.beta.version}</version>
         </dependency>
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-easy-rag</artifactId>
+            <version>${langchain4j.beta.version}</version>
         </dependency>
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-elasticsearch</artifactId>
+            <version>${langchain4j.beta.version}</version>
         </dependency>
 
-        <!-- LangGraph4j 集成（ChatMessage/ToolExecutionRequest 序列化器） -->
+        <!-- ===== LangGraph4j 集成（ChatMessage / ToolExecutionRequest 序列化器） ===== -->
         <dependency>
             <groupId>org.bsc.langgraph4j</groupId>
             <artifactId>langgraph4j-core</artifactId>
+            <version>${langgraph4j.version}</version>
         </dependency>
         <dependency>
             <groupId>org.bsc.langgraph4j</groupId>
             <artifactId>langgraph4j-langchain4j</artifactId>
+            <version>${langgraph4j.version}</version>
         </dependency>
 
-        <!-- 强制锁定 ES 客户端版本 -->
+        <!-- ===== ES 客户端（强制锁定版本） ===== -->
         <dependency>
             <groupId>co.elastic.clients</groupId>
             <artifactId>elasticsearch-java</artifactId>
+            <version>${elasticsearch.version}</version>
         </dependency>
         <dependency>
             <groupId>org.elasticsearch.client</groupId>
             <artifactId>elasticsearch-rest-client</artifactId>
+            <version>${elasticsearch.version}</version>
         </dependency>
 
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!-- ===== 密码哈希（BCrypt） =====
+             只取 spring-security-crypto 这一个工具包，不引入 spring-boot-starter-security：
+             本产品的鉴权是"单账号 + 签名凭证"，用不到 Security 的过滤器链 / 会话 / 角色体系，
+             引入整套会把既有的轻量鉴权模型推翻，且会默认开启一堆与需求无关的拦截。
+             版本显式锁定（不跟随 Boot 管理的版本），避免随 Boot 升级改变 BCrypt 行为。 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+            <version>${spring-security-crypto.version}</version>
+        </dependency>
     </dependencies>
 
     <build>
+        <!-- 交付包为平台无关的单文件 fat jar（字节码跨平台），不再带 -<系统>-<架构> 后缀：
+             运行期存储目录（配置 / 日志）由 RuntimeEnvironment 在启动装配前按探测到的操作系统
+             自动选择，可用 STRINGER_SETTINGS_PATH / STRINGER_LOG_PATH 环境变量或同名 JVM 系统属性覆盖。 -->
+        <finalName>stringer-${project.version}</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <mainClass>com.zxc.stringer.server.SpringRagApplication</mainClass>
+                    <mainClass>com.zzkingcc.stringer.server.StringerServerApplication</mainClass>
                 </configuration>
+                <executions>
+                    <!-- 产出 META-INF/build-info.properties：版本号由构建信息提供，
+                         探测接口不再硬编码版本字符串，避免"报的版本"与 jar 实际版本脱节 -->
+                    <execution>
+                        <id>build-info</id>
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

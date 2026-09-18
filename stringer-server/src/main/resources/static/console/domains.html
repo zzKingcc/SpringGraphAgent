@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>域空间 · Stringer 管控台</title>
+    <link rel="stylesheet" href="assets/console.css">
+    <style>
+        /* ===== 工具栏：选择域 + 搜索 + 每页数量 ===== */
+        .toolbar {
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        }
+        .toolbar .tb-label { font-size: 13px; color: var(--muted); white-space: nowrap; }
+        .toolbar select#domainSelect { width: auto; min-width: 180px; font-weight: 600; }
+        .toolbar input[type="search"] { flex: 1 1 200px; width: auto; }
+        .toolbar .spacer { flex: 1 1 auto; }
+        .toolbar-card { padding: 14px 20px; }
+
+        /* 当前视图说明（把"现在在看什么"写在内容上面，避免误读统计数字） */
+        .view-note {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+            font-size: 12.5px; padding: 9px 14px; border-radius: 6px; margin-bottom: 16px;
+            background: var(--primary-dim); color: var(--primary); border: 1px solid #dbeafe;
+        }
+        .view-note b { font-family: ui-monospace, Consolas, monospace; }
+        .view-note.dim { background: #f8fafc; color: var(--muted); border-color: var(--border); }
+
+        /* ===== 分页条 ===== */
+        .pager { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+        .pager.above { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+        .pager.below { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+        .pager .pg-info b { color: var(--text); font-family: ui-monospace, Consolas, monospace; }
+        .pager button { padding: 4px 12px; font-size: 12.5px; }
+        .page-dots { display: flex; gap: 4px; flex-wrap: wrap; }
+        .page-dots button { padding: 3px 9px; font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+        .page-dots button.cur {
+            background: var(--primary-dim); color: var(--primary);
+            border: 1px solid var(--primary); font-weight: 600; opacity: 1;
+        }
+
+        /* ===== 域详情（单域视图） ===== */
+        .dom-card { border-left: 3px solid var(--primary); }
+        .dom-card .card-head { margin-bottom: 12px; flex-wrap: wrap; }
+        .dom-card h2 { font-family: ui-monospace, Consolas, monospace; font-size: 15px; }
+        .dom-icon { width: 17px; height: 17px; flex: 0 0 17px; color: var(--primary); }
+
+        .chips { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+        .chip {
+            font-size: 12px; padding: 2px 9px; border-radius: 10px;
+            background: #f1f5f9; color: var(--slate); white-space: nowrap;
+        }
+        .chip b { font-family: ui-monospace, Consolas, monospace; font-weight: 600; color: var(--text); }
+        .chip.ok { background: #ecfdf5; color: var(--green); }
+        .chip.warn { background: #fffbeb; color: var(--amber); }
+
+        /* 副作用构成条：一眼看出这个域是只读为主还是带写/破坏性 */
+        .side-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 10px 0 4px; background: #f1f5f9; }
+        .side-bar i { display: block; height: 100%; }
+        .side-bar i.read { background: var(--green); }
+        .side-bar i.write { background: var(--amber); }
+        .side-bar i.destructive { background: var(--red); }
+        .bar-legend { font-size: 11.5px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; }
+        .bar-legend span::before {
+            content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+            margin-right: 5px; vertical-align: -1px;
+        }
+        .bar-legend .l-read::before { background: var(--green); }
+        .bar-legend .l-write::before { background: var(--amber); }
+        .bar-legend .l-destructive::before { background: var(--red); }
+
+        details.prompt-box { margin: 12px 0 4px; }
+        details.prompt-box > summary {
+            font-size: 12px; color: var(--primary); cursor: pointer;
+            list-style: none; display: inline-block; user-select: none;
+        }
+        details.prompt-box > summary::-webkit-details-marker { display: none; }
+        details.prompt-box > summary::before { content: '▸ '; }
+        details.prompt-box[open] > summary::before { content: '▾ '; }
+        pre.preview {
+            margin: 8px 0 0; padding: 12px 14px; border-radius: 6px;
+            background: #0f172a; color: #e2e8f0;
+            font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+            line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+            max-height: 300px; overflow: auto;
+        }
+        pre.preview .mark { color: #93c5fd; }
+
+        .orphan-box {
+            background: #fffbeb; border: 1px solid #fde68a; color: #b45309;
+            padding: 10px 12px; border-radius: 6px; font-size: 12.5px; line-height: 1.7; margin-bottom: 14px;
+        }
+        .empty { color: var(--muted); padding: 16px 4px; font-size: 13px; line-height: 1.8; }
+        .muted { color: var(--muted); }
+        .mono { font-family: ui-monospace, Consolas, monospace; }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="main">
+        <div class="page-head">
+            <h2>域空间</h2>
+            <p>
+                按<b>域</b>查看注册表里实际注册到的内容：这个域能用到哪些工具、分别由谁提供、
+                哪些需要人工确认、有没有配提示词。<b>只读呈现</b>——编辑提示词请到「提示词设定」。
+            </p>
+        </div>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="k">域数量</div>
+                <div class="v" id="statDomains">—</div>
+                <div class="note" id="noteDomains">由工具声明派生，非预定义</div>
+            </div>
+            <div class="stat">
+                <div class="k">已注册工具</div>
+                <div class="v" id="statTools">—</div>
+                <div class="note" id="noteTools">含全域可见工具</div>
+            </div>
+            <div class="stat">
+                <div class="k">全域可见工具</div>
+                <div class="v" id="statGlobal">—</div>
+                <div class="note">未声明 profiles，每个域都能用</div>
+            </div>
+            <div class="stat">
+                <div class="k">需人工确认</div>
+                <div class="v" id="statApproval">—</div>
+                <div class="note">所有域加总（同工具在多域计入多次）</div>
+            </div>
+            <div class="stat">
+                <div class="k">缺提示词的域</div>
+                <div class="v" id="statMissing">—</div>
+                <div class="note">不配也能用，只是体验降级</div>
+            </div>
+        </div>
+
+        <div id="orphanBox" class="orphan-box" style="display:none;"></div>
+
+        <div class="card toolbar-card">
+            <div class="toolbar">
+                <span class="tb-label">选择域</span>
+                <select id="domainSelect">
+                    <option value="">全部域</option>
+                </select>
+                <input type="search" id="query" placeholder="搜索工具名 / 描述">
+                <span class="spacer"></span>
+                <select id="pageSize" title="每页条数">
+                    <option value="8" selected>每页 8 条</option>
+                    <option value="16">每页 16 条</option>
+                    <option value="32">每页 32 条</option>
+                    <option value="0">全部</option>
+                </select>
+                <button class="ghost" id="refreshBtn">重新读取</button>
+            </div>
+        </div>
+
+        <div id="viewNote" class="view-note dim">正在读取…</div>
+
+        <!-- ===== 已注册工具（原「概览」页的工具清单，迁到这里） ===== -->
+        <div class="card" id="toolsCard">
+            <div class="card-head">
+                <h2 id="toolsTitle">已注册工具</h2>
+                <span class="spacer"></span>
+                <span class="card-note" id="toolsNote"></span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>工具名</th>
+                        <th>所属域</th>
+                        <th>分类</th>
+                        <th>提供者</th>
+                        <th>副作用</th>
+                        <th>需确认</th>
+                        <th>描述</th>
+                    </tr>
+                    </thead>
+                    <tbody id="toolBody">
+                    <tr><td colspan="7" class="perm-none">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pager below" id="toolsPager" style="display:none;"></div>
+            <div class="hint">
+                「所属域」写法：<span class="tag public">全域</span> ＝ 该工具<b>未声明 profiles</b>，对每个域都可见；
+                其余为工具显式声明的域（同名域在多个工具上声明即合并，平台不预定义域）。
+                域<b>写下即存在</b>：之后就算声明它的工具被断开，域也不会消失，只是该域下暂时没有工具。
+            </div>
+        </div>
+
+        <!-- ===== 域清单（选择域 = 全部域 时显示） ===== -->
+        <div class="card" id="domainsCard">
+            <div class="card-head">
+                <h2>域清单</h2>
+                <span class="spacer"></span>
+                <span class="card-note" id="domainsNote"></span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>域</th>
+                        <th>工具</th>
+                        <th>专属</th>
+                        <th>提供者</th>
+                        <th>需确认</th>
+                        <th>副作用</th>
+                        <th>提示词</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody id="domainBody">
+                    <tr><td colspan="8" class="perm-none">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pager below" id="domainsPager" style="display:none;"></div>
+            <div class="hint">
+                「工具」＝该域真实可见的工具集（含全域可见工具），故<b>通常大于</b>「专属」数。
+                点「查看」或从上方「选择域」菜单选中某个域，可看它注册内容的完整明细。
+            </div>
+        </div>
+
+        <!-- ===== 域详情（选中单个域时显示） ===== -->
+        <div id="detailWrap"></div>
+    </main>
+</div>
+
+<script src="assets/console.js"></script>
+<script>
+    var esc = Console.escapeHtml;
+
+    var GLOBAL = '__global__';        // 「选择域」菜单里代表"全域可见"的哨兵值
+    var MODE = '';                    // '' = 全部域 | '__global__' | 具体域名
+    var SIZE = 8;
+
+    var DATA = null;
+    var ALL_TOOLS = [];               // 合并后的工具总表（含所属域）
+    var PAGE = { tools: 1, domains: 1 };
+    var QUERY = '';
+
+    /* 域图标（三层堆叠 = 域的叠加空间），与侧栏导航同一个字形 */
+    var DOM_ICON = '<svg class="dom-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+        + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg>';
+
+    function num(n) { return (n == null ? 0 : n); }
+
+    function sideTag(s) {
+        if (!s) { return '<span class="tag">-</span>'; }
+        return '<span class="tag ' + String(s).toLowerCase() + '">' + esc(s) + '</span>';
+    }
+
+    function approvalTag(t) {
+        if (!t.requiresApproval) { return '<span class="perm-none">-</span>'; }
+        return '<span class="tag approval" title="' + esc(t.approvalReason || '') + '">'
+            + esc(t.approvalMode || 'REQUIRED') + '</span>';
+    }
+
+    function domainTags(domains) {
+        if (!domains || !domains.length) { return '<span class="tag public">全域</span>'; }
+        return domains.map(function (d) { return '<span class="tag perm">' + esc(d) + '</span>'; }).join('');
+    }
+
+    /* ===== 合并工具总表 =====
+       数据全部来自服务端：域名清单来自 domains[].tools（服务端按 ToolRegistry 的同一过滤条件算出来的），
+       哪些是"全域可见"由 globalTools 判定。前端**不自己按 profiles 重算可见性**——
+       那样就多了一个判据副本，一旦不一致就会出现"页面显示的可见工具 ≠ 模型实际拿到的工具"。 */
+    function buildTools() {
+        var globalNames = {};
+        (DATA.globalTools || []).forEach(function (t) { globalNames[t.name] = true; });
+
+        var map = {};
+        (DATA.domains || []).forEach(function (d) {
+            (d.tools || []).forEach(function (t) {
+                var row = map[t.name];
+                if (!row) {
+                    row = map[t.name] = Object.assign({}, t, { domains: [], global: !!globalNames[t.name] });
+                }
+                if (!row.global) { row.domains.push(d.name); }
+            });
+        });
+        // 一个域都没有时，domains[] 为空，全域工具只能从 globalTools 里拿
+        (DATA.globalTools || []).forEach(function (t) {
+            if (!map[t.name]) {
+                map[t.name] = Object.assign({}, t, { domains: [], global: true });
+            }
+        });
+
+        return Object.keys(map).sort().map(function (k) { return map[k]; });
+    }
+
+    function matchQuery(s) {
+        return String(s || '').toLowerCase().indexOf(QUERY) >= 0;
+    }
+
+    /* ===== 统计：始终是注册表总量，不随下方筛选变化（避免"筛完还显示全量数字"的误读） =====
+       「0」要读成**未注册**而不是"出错了"：前者去写工具注解，后者查扫描。
+       所以 0 一律配 warn 态 + 一句明确的未注册说明，不留光秃秃的 0。 */
+    function renderStats() {
+        var s = (DATA && DATA.stats) || {};
+        var set = function (id, val, cls) {
+            var el = document.getElementById(id);
+            el.textContent = val;
+            el.className = 'v' + (cls ? ' ' + cls : '');
+        };
+        var toolCount = num(s.toolCount);
+        var domainCount = num(s.domainCount);
+
+        set('statDomains', domainCount, domainCount ? 'ok' : 'warn');
+        document.getElementById('noteDomains').textContent = domainCount
+            ? '由工具声明派生，非预定义'
+            : '未注册：没有工具声明 profiles';
+
+        set('statTools', toolCount, toolCount ? 'ok' : 'warn');
+        document.getElementById('noteTools').textContent = toolCount
+            ? '含全域可见工具'
+            : '未注册：没有扫描到任何工具提供者';
+
+        set('statGlobal', num(s.globalToolCount), '');
+        set('statApproval', num(s.approvalToolCount), '');
+        set('statMissing', num(s.missingPromptCount), s.missingPromptCount ? 'warn' : 'ok');
+    }
+
+    /* ===== 分页条（工具表 / 域清单共用一套，靠 kind 区分翻页目标） ===== */
+    function renderPager(id, kind, total, pages) {
+        var el = document.getElementById(id);
+        if (pages <= 1) { el.style.display = 'none'; el.innerHTML = ''; return; }
+        el.style.display = 'flex';
+
+        var page = PAGE[kind];
+        var from = (page - 1) * SIZE + 1;
+        var to = Math.min(page * SIZE, total);
+
+        var dots = '';
+        for (var i = 1; i <= pages; i++) {
+            var near = Math.abs(i - page) <= 2 || i === 1 || i === pages;
+            if (!near) {
+                if (i === 2 || i === pages - 1) { dots += '<span style="color:#cbd5e1;">…</span>'; }
+                continue;
+            }
+            dots += '<button class="' + (i === page ? 'cur' : 'sec') + '" data-kind="' + kind
+                + '" data-page="' + i + '">' + i + '</button>';
+        }
+
+        el.innerHTML = '<button class="sec" data-kind="' + kind + '" data-page="' + (page - 1) + '"'
+            + (page <= 1 ? ' disabled' : '') + '>上一页</button>'
+            + '<span class="pg-info">第 <b>' + page + '</b> / <b>' + pages + '</b> 页 · 共 <b>' + total
+            + '</b> 条（本页 ' + from + '–' + to + '）</span>'
+            + '<span class="page-dots">' + dots + '</span>'
+            + '<button class="sec" data-kind="' + kind + '" data-page="' + (page + 1) + '"'
+            + (page >= pages ? ' disabled' : '') + '>下一页</button>';
+    }
+
+    function pageSlice(rows, kind) {
+        var pages = SIZE > 0 ? Math.max(1, Math.ceil(rows.length / SIZE)) : 1;
+        if (PAGE[kind] > pages) { PAGE[kind] = pages; }
+        if (PAGE[kind] < 1) { PAGE[kind] = 1; }
+        var out = SIZE > 0 ? rows.slice((PAGE[kind] - 1) * SIZE, PAGE[kind] * SIZE) : rows;
+        return { rows: out, pages: pages };
+    }
+
+    /* ===== 卡：已注册工具（平铺） ===== */
+    function renderToolsCard() {
+        var card = document.getElementById('toolsCard');
+        var tbody = document.getElementById('toolBody');
+        var note = document.getElementById('toolsNote');
+        var byDomain = MODE !== '' && MODE !== GLOBAL;
+
+        // 单域视图下这张表与域详情重复，直接隐藏（域详情里已经列了该域全部工具）
+        if (byDomain) { card.style.display = 'none'; return; }
+        card.style.display = 'block';
+
+        var rows = ALL_TOOLS.filter(function (t) {
+            if (MODE === GLOBAL && !t.global) { return false; }
+            return !QUERY || matchQuery(t.name) || matchQuery(t.description);
+        });
+
+        document.getElementById('toolsTitle').textContent =
+            MODE === GLOBAL ? '全域可见工具' : '已注册工具';
+        note.textContent = rows.length + ' 条' + (QUERY ? '（已按关键词过滤）' : '');
+
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="7" class="perm-none">'
+                + (QUERY ? '没有工具匹配当前关键词。'
+                         : '<b>无</b> —— 未注册任何工具（实现 StringerToolProvider 并标注 @StringerTool，'
+                           + '服务端启动扫描后即出现在这里；工具不落盘，注册只发生在启动那一刻）')
+                + '</td></tr>';
+            renderPager('toolsPager', 'tools', 0, 1);
+            return;
+        }
+
+        var paged = pageSlice(rows, 'tools');
+        tbody.innerHTML = paged.rows.map(tbodyRow).join('');
+        renderPager('toolsPager', 'tools', rows.length, paged.pages);
+    }
+
+    function tbodyRow(t) {
+        return '<tr>'
+            + '<td><b class="mono">' + esc(t.name) + '</b>'
+            +   (t.exclusive ? ' <span class="tag perm" title="只声明了这一个域">专属</span>' : '')
+            + '</td>'
+            + '<td style="min-width:120px;">' + domainTags(t.global ? [] : t.domains) + '</td>'
+            + '<td>' + esc(t.category || '-') + '</td>'
+            + '<td>' + esc(t.provider || '-')
+            +   '<div class="card-note mono">' + esc(t.source || '') + '</div></td>'
+            + '<td>' + sideTag(t.sideEffect) + '</td>'
+            + '<td>' + approvalTag(t) + '</td>'
+            + '<td class="muted">' + esc(t.description || '') + '</td>'
+            + '</tr>';
+    }
+
+    /* ===== 卡：域清单（全部域视图） ===== */
+    function renderDomainsCard() {
+        var card = document.getElementById('domainsCard');
+        var tbody = document.getElementById('domainBody');
+
+        if (MODE !== '') { card.style.display = 'none'; return; }
+        card.style.display = 'block';
+
+        var rows = (DATA.domains || []).filter(function (d) {
+            return !QUERY || matchQuery(d.name) || (d.tools || []).some(function (t) { return matchQuery(t.name); });
+        });
+        document.getElementById('domainsNote').textContent = rows.length + ' 个域';
+
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="perm-none">'
+                + (QUERY ? '没有域匹配当前关键词。'
+                         : '<b>无</b> —— 未注册任何域（没有任何工具声明 profiles；'
+                           + '域由工具注解声明即创建，不预定义、不落盘）')
+                + '</td></tr>';
+            renderPager('domainsPager', 'domains', 0, 1);
+            return;
+        }
+
+        var paged = pageSlice(rows, 'domains');
+        tbody.innerHTML = paged.rows.map(function (d) {
+            var se = d.sideEffects || {};
+            var side = [];
+            if (num(se.READ)) { side.push(num(se.READ) + ' 只读'); }
+            if (num(se.WRITE)) { side.push(num(se.WRITE) + ' 写'); }
+            if (num(se.DESTRUCTIVE)) { side.push(num(se.DESTRUCTIVE) + ' 破坏'); }
+            var prompt = d.hasPrompt
+                ? '<span class="tag read">' + num(d.promptLength) + ' 字</span>'
+                : '<span class="tag write">缺提示词</span>';
+            return '<tr>'
+                + '<td><b class="mono">' + esc(d.name) + '</b></td>'
+                + '<td>' + num(d.toolCount) + '</td>'
+                + '<td>' + num(d.exclusiveToolCount) + '</td>'
+                + '<td>' + num(d.providerCount) + '</td>'
+                + '<td>' + (num(d.approvalCount)
+                    ? '<span class="tag approval">' + num(d.approvalCount) + '</span>'
+                    : '<span class="perm-none">-</span>') + '</td>'
+                + '<td class="muted">' + (side.join(' / ') || '-') + '</td>'
+                + '<td>' + prompt + '</td>'
+                + '<td><button class="ghost" data-open="' + esc(d.name) + '">查看</button></td>'
+                + '</tr>';
+        }).join('');
+
+        renderPager('domainsPager', 'domains', rows.length, paged.pages);
+        tbody.querySelectorAll('button[data-open]').forEach(function (b) {
+            b.addEventListener('click', function () { openDomain(b.getAttribute('data-open')); });
+        });
+    }
+
+    /* ===== 卡：域详情（选中单个域） ===== */
+    function renderDetail() {
+        var wrap = document.getElementById('detailWrap');
+        if (MODE === '' || MODE === GLOBAL) { wrap.innerHTML = ''; return; }
+
+        var d = (DATA.domains || []).filter(function (x) { return x.name === MODE; })[0];
+        if (!d) {
+            wrap.innerHTML = '<div class="card"><div class="empty">'
+                + '当前没有任何工具声明域 <b class="mono">' + esc(MODE) + '</b>'
+                + '（域本身仍存在，可能提供它的工具正被断开）。'
+                + '请从上方「选择域」菜单重新选择。</div></div>';
+            return;
+        }
+
+        var tools = (d.tools || []).filter(function (t) {
+            return !QUERY || matchQuery(t.name) || matchQuery(t.description);
+        });
+
+        var se = d.sideEffects || {};
+        var read = num(se.READ), write = num(se.WRITE), dest = num(se.DESTRUCTIVE);
+        var total = read + write + dest;
+        var bar = '';
+        if (total > 0) {
+            var pct = function (v) { return (v * 100 / total).toFixed(1) + '%'; };
+            bar = '<div class="side-bar">'
+                + (read ? '<i class="read" style="width:' + pct(read) + '"></i>' : '')
+                + (write ? '<i class="write" style="width:' + pct(write) + '"></i>' : '')
+                + (dest ? '<i class="destructive" style="width:' + pct(dest) + '"></i>' : '')
+                + '</div>'
+                + '<div class="bar-legend">'
+                + '<span class="l-read">只读 <b>' + read + '</b></span>'
+                + '<span class="l-write">写 <b>' + write + '</b></span>'
+                + '<span class="l-destructive">破坏性 <b>' + dest + '</b></span>'
+                + '</div>';
+        }
+
+        var promptBox = d.promptPreview
+            ? '<details class="prompt-box"><summary>该域实际生效的 SystemMessage（公共基线 + 域差异，共 '
+                + d.promptPreview.length + ' 字）</summary>'
+                + '<pre class="preview">' + esc(d.promptPreview) + '</pre></details>'
+            : '<div class="hint">公共基线与该域提示词都为空 —— 该域本轮不会下发任何系统提示词。</div>';
+
+        wrap.innerHTML = '<div class="card dom-card">'
+            + '<div class="card-head">'
+            +   DOM_ICON
+            +   '<h2>' + esc(d.name) + '</h2>'
+            +   '<span class="spacer"></span>'
+            +   '<span class="chips">'
+            +     '<span class="chip">工具 <b>' + num(d.toolCount) + '</b></span>'
+            +     '<span class="chip">专属 <b>' + num(d.exclusiveToolCount) + '</b></span>'
+            +     '<span class="chip">提供者 <b>' + num(d.providerCount) + '</b></span>'
+            +     '<span class="chip">需确认 <b>' + num(d.approvalCount) + '</b></span>'
+            +     (d.hasPrompt ? '<span class="chip ok">提示词 ' + num(d.promptLength) + ' 字</span>'
+                              : '<span class="chip warn">缺提示词</span>')
+            +   '</span>'
+            + '</div>'
+            + bar
+            + promptBox
+            + '<div style="margin-top:12px;">'
+            +   (tools.length
+                ? '<div class="table-wrap"><table><thead><tr>'
+                    + '<th>工具名</th><th>分类</th><th>提供者</th><th>副作用</th>'
+                    + '<th>需确认</th><th>参数</th><th>描述</th>'
+                    + '</tr></thead><tbody>'
+                    + tools.map(function (t) {
+                        return '<tr>'
+                            + '<td><b class="mono">' + esc(t.name) + '</b>'
+                            +   (t.exclusive ? ' <span class="tag perm">专属</span>' : '')
+                            + '</td>'
+                            + '<td>' + esc(t.category || '-') + '</td>'
+                            + '<td>' + esc(t.provider || '-')
+                            +   '<div class="card-note mono">' + esc(t.source || '') + '</div></td>'
+                            + '<td>' + sideTag(t.sideEffect) + '</td>'
+                            + '<td>' + approvalTag(t) + '</td>'
+                            + '<td>' + num(t.paramCount) + '</td>'
+                            + '<td class="muted">' + esc(t.description || '') + '</td>'
+                            + '</tr>';
+                    }).join('')
+                    + '</tbody></table></div>'
+                    + '<div class="hint">该域可见工具共 ' + (d.tools || []).length + ' 个'
+                    +   (QUERY ? '（当前关键词过滤后 ' + tools.length + ' 个）' : '') + '。</div>'
+                : '<div class="empty">' + (QUERY ? '该域没有工具匹配当前关键词。' : '该域没有可见工具。')
+                  + '</div>')
+            + '</div>'
+            + '</div>';
+    }
+
+    /* ===== 视图说明：把"现在在看什么"写清楚 ===== */
+    function renderViewNote() {
+        var el = document.getElementById('viewNote');
+        var s = (DATA && DATA.stats) || {};
+        var toolCount = num(s.toolCount);
+        var domainCount = num(s.domainCount);
+
+        if (MODE === '') {
+            // 一个工具都没有 = 注册表未注册，不是"筛选筛没了"，所以单独说一句
+            if (!toolCount) {
+                el.className = 'view-note dim';
+                el.innerHTML = '当前视图：<b>全部域</b> —— <b>注册表未注册</b>：'
+                    + '没有扫描到任何 <code>@StringerTool</code> 工具提供者，因此也没有派生任何域。'
+                    + '工具注册与域都<b>不落盘</b>（启动时扫描注解得到），所以这里没有"清空"动作可做。';
+                return;
+            }
+            el.className = 'view-note';
+            el.innerHTML = '当前视图：<b>全部域</b>（' + domainCount + ' 个域 · ' + toolCount + ' 个工具）'
+                + ' —— 上方为工具总表，下方为域清单。';
+        } else if (MODE === GLOBAL) {
+            el.className = 'view-note';
+            el.innerHTML = '当前视图：<b>全域可见</b>（未声明 profiles 的工具）'
+                + ' —— 这些工具在每个域里都可见，不属于任何具体域。';
+        } else {
+            el.className = 'view-note';
+            el.innerHTML = '当前视图：域 <b>' + esc(MODE) + '</b>'
+                + ' —— 下方列出该域注册到的工具明细。'
+                + '<button class="ghost" id="backAll" style="margin-left:8px;">返回全部域</button>';
+            var btn = document.getElementById('backAll');
+            if (btn) { btn.addEventListener('click', function () { openDomain(''); }); }
+        }
+    }
+
+    function renderSelect() {
+        var sel = document.getElementById('domainSelect');
+        var domains = (DATA.domains || []).map(function (d) { return d.name; });
+        var opts = '<option value="">全部域</option>'
+            + (domains.length || MODE === GLOBAL
+                ? '<option value="' + GLOBAL + '">全域可见</option>' : '')
+            + domains.map(function (n) {
+                return '<option value="' + esc(n) + '"' + (n === MODE ? ' selected' : '') + '>'
+                    + esc(n) + '</option>';
+            }).join('');
+        // 之前选中的域当前没有工具声明它，仍保留显式条目，否则 select 会静默回落到"全部域"且不提示
+        if (MODE !== '' && MODE !== GLOBAL && domains.indexOf(MODE) < 0) {
+            opts += '<option value="' + esc(MODE) + '" selected>' + esc(MODE) + '（当前无工具）</option>';
+        }
+        sel.innerHTML = opts;
+        if (MODE === '') { sel.value = ''; } else { sel.value = MODE; }
+    }
+
+    function render() {
+        renderStats();
+        renderViewNote();
+        renderToolsCard();
+        renderDomainsCard();
+        renderDetail();
+        bindPager();
+    }
+
+    function bindPager() {
+        document.querySelectorAll('.pager button[data-page]').forEach(function (b) {
+            b.addEventListener('click', function () {
+                if (b.disabled) { return; }
+                var p = parseInt(b.getAttribute('data-page'), 10);
+                if (!isNaN(p)) {
+                    PAGE[b.getAttribute('data-kind')] = p;
+                    render();
+                    document.getElementById('viewNote').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+    }
+
+    function openDomain(name) {
+        MODE = name || '';
+        PAGE.tools = 1;
+        PAGE.domains = 1;
+        renderSelect();
+        render();
+    }
+
+    function load() {
+        document.getElementById('viewNote').textContent = '正在读取…';
+        Console.request('/admin/domains').then(function (r) {
+            DATA = r || {};
+            ALL_TOOLS = buildTools();
+            PAGE.tools = 1;
+            PAGE.domains = 1;
+            // 已选中的域当前无工具声明时，保留提示（renderSelect 里会补一条"当前无工具"）
+            renderSelect();
+            render();
+
+            var orphans = DATA.orphanPrompts || [];
+            var box = document.getElementById('orphanBox');
+            if (orphans.length) {
+                box.style.display = 'block';
+                box.innerHTML = '<b>孤儿提示词条目：</b>' + orphans.map(esc).join('、')
+                    + '<br>这些域从未被任何工具声明过，配置留着但不会生效，也不会被自动清理。';
+            } else {
+                box.style.display = 'none';
+            }
+        }).catch(function (e) {
+            document.getElementById('viewNote').innerHTML = '读取失败：' + esc(e.message);
+            document.getElementById('viewNote').className = 'view-note dim';
+            document.getElementById('toolBody').innerHTML =
+                '<tr><td colspan="7" style="color:var(--red);">加载失败: ' + esc(e.message) + '</td></tr>';
+            document.getElementById('domainBody').innerHTML =
+                '<tr><td colspan="8" style="color:var(--red);">加载失败</td></tr>';
+            ['statDomains', 'statTools', 'statGlobal', 'statApproval', 'statMissing'].forEach(function (id) {
+                var el = document.getElementById(id);
+                el.textContent = '—';
+                el.className = 'v err';
+            });
+        });
+    }
+
+    document.getElementById('domainSelect').addEventListener('change', function (e) {
+        openDomain(e.target.value);
+    });
+
+    document.getElementById('query').addEventListener('input', function (e) {
+        QUERY = (e.target.value || '').trim().toLowerCase();
+        PAGE.tools = 1;
+        PAGE.domains = 1;
+        render();
+    });
+
+    document.getElementById('pageSize').addEventListener('change', function (e) {
+        SIZE = parseInt(e.target.value, 10) || 0;
+        PAGE.tools = 1;
+        PAGE.domains = 1;
+        render();
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', load);
+
+    Console.renderSidebar('domains');
+    /* 走 Console.ready：先确认登录态再加载，未登录直接跳登录页，
+       不会先打一轮受保护接口留下 401 日志（见 console.js ready 的注释） */
+    Console.ready(load);
+</script>
+</body>
+</html>

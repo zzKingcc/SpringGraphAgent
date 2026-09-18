@@ -1,0 +1,45 @@
+# 第三方依赖与许可
+
+本文列出交付物**直接依赖**的主要三方组件及其许可。仅供交付沟通与合规评审参考；
+**正式清单请以实际打入 jar 的制品为准**——最稳妥的做法是在有网环境执行一次：
+
+```bash
+mvn -o org.codehaus.mojo:license-maven-plugin:2.4.0:aggregate-add-third-party
+# 离线不可用时，联网执行：
+mvn org.codehaus.mojo:license-maven-plugin:2.4.0:aggregate-add-third-party
+```
+
+产物在 `target/generated-sources/license/THIRD-PARTY.txt`，覆盖全部传递依赖。
+
+---
+
+## 直接依赖
+
+| 组件 | 版本 | 许可 | 说明 |
+| --- | --- | --- | --- |
+| Spring Boot / Spring Framework / Spring Data Redis | 3.5.7 | Apache-2.0 | 应用骨架、Web、SSE、数据访问 |
+| Apache Tomcat (spring-boot-starter-web 内嵌) | 随 Boot | Apache-2.0 | 内嵌 Servlet 容器 |
+| Project Reactor (reactor-core) | 随 Boot | Apache-2.0 | 流式（SSE）实现 |
+| LangChain4j（core / open-ai / reactor / easy-rag / elasticsearch） | 1.18.1 | Apache-2.0 | 模型调用、文档解析、向量存储适配 |
+| LangGraph4j（core / langchain4j） | 1.8.17 | Apache-2.0（**待复核**） | 图编排与检查点 |
+| Elasticsearch Java Client / Low Level REST Client | 9.4.4 | Apache-2.0 | ES 检索与索引管理 |
+| Lettuce | 随 Boot | Apache-2.0 | Redis 客户端 |
+| Apache Commons Pool 2 | 随 Boot | Apache-2.0 | Lettuce 连接池 |
+| Jackson (databind / core / annotations) | 随 Boot | Apache-2.0 | JSON 序列化 |
+| spring-security-crypto（仅 BCrypt） | 6.3.3 | Apache-2.0 | 密码哈希（不引 Security 过滤器链） |
+| SLF4J API | 随 Boot | MIT | 日志门面 |
+| Logback (classic / core) | 随 Boot | EPL-1.0 或 LGPL-2.1（双许可，择一） | 日志实现 |
+| Micrometer (observation / commons) | 随 Boot | Apache-2.0 | 仅作观测 API 传递依赖，未启用指标后端 |
+| Lombok | 随 Boot | MIT | 编译期代码生成（**不进入运行时**，编译期可选依赖） |
+
+## 需要交付方注意的两点
+
+1. **Logback 是双许可（EPL-1.0 / LGPL-2.1）**：分发整包时按 EPL-1.0 履行即可，
+   但若贵司政策排斥 LGPL 系许可，请在清单里明确选择 EPL-1.0 并保留其许可文本。
+2. **Lombok 是 `provided` 作用域**：它只参与编译，不打进交付物，通常无需列入分发许可，
+   但源码分发场景下仍需保留其 MIT 许可声明。
+
+## 本项目的许可
+
+Stringer 本体以 **Apache-2.0** 分发（见根目录 `LICENSE`）。
+分发时需随附该文件，并在显著位置保留版权与许可声明。

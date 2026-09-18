@@ -11,22 +11,22 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.zxc</groupId>
+    <groupId>com.zzkingcc</groupId>
     <artifactId>Stringer</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
     <packaging>pom</packaging>
     <name>Stringer</name>
     <description>Java-based AI Workflow Orchestration Starter - 多模块聚合工程</description>
 
     <modules>
-        <module>stringer-core</module>
+        <module>stringer-api</module>
         <module>stringer-common</module>
-        <module>stringer-retrieval</module>
+        <module>stringer-domain</module>
         <module>stringer-infrastructure</module>
-        <module>stringer-capability</module>
-        <module>stringer-agent</module>
-        <module>stringer-server</module>
+        <module>stringer-runtime</module>
         <module>stringer-spring-boot-starter</module>
+        <module>stringer-tool-instance</module>
+        <module>stringer-server</module>
         <module>stringer-example</module>
     </modules>
 
@@ -35,10 +35,12 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <stringer.version>1.0-SNAPSHOT</stringer.version>
+        <stringer.version>0.1.0</stringer.version>
         <langchain4j.version>1.18.1</langchain4j.version>
+        <langchain4j.beta.version>1.18.1-beta28</langchain4j.beta.version>
         <langgraph4j.version>1.8.17</langgraph4j.version>
         <elasticsearch.version>9.4.4</elasticsearch.version>
+        <spring-security-crypto.version>6.3.3</spring-security-crypto.version>
     </properties>
 
     <dependencyManagement>
@@ -60,7 +62,6 @@
                 <scope>import</scope>
             </dependency>
 
-            <!-- 强制锁定 ES 客户端版本（langchain4j-bom 解析的版本与 ES 服务器 9.4.4 不一致） -->
             <dependency>
                 <groupId>co.elastic.clients</groupId>
                 <artifactId>elasticsearch-java</artifactId>
@@ -74,50 +75,71 @@
 
             <!-- ===== 内部模块版本管理 ===== -->
             <dependency>
-                <groupId>com.zxc</groupId>
-                <artifactId>stringer-core</artifactId>
+                <groupId>com.zzkingcc</groupId>
+                <artifactId>stringer-api</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.zxc</groupId>
+                <groupId>com.zzkingcc</groupId>
                 <artifactId>stringer-common</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.zxc</groupId>
-                <artifactId>stringer-retrieval</artifactId>
+                <groupId>com.zzkingcc</groupId>
+                <artifactId>stringer-domain</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.zxc</groupId>
+                <groupId>com.zzkingcc</groupId>
                 <artifactId>stringer-infrastructure</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.zxc</groupId>
-                <artifactId>stringer-capability</artifactId>
+                <groupId>com.zzkingcc</groupId>
+                <artifactId>stringer-runtime</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.zxc</groupId>
-                <artifactId>stringer-agent</artifactId>
-                <version>${stringer.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.zxc</groupId>
-                <artifactId>stringer-server</artifactId>
-                <version>${stringer.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.zxc</groupId>
+                <groupId>com.zzkingcc</groupId>
                 <artifactId>stringer-spring-boot-starter</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.zxc</groupId>
+                <groupId>com.zzkingcc</groupId>
+                <artifactId>stringer-tool-instance</artifactId>
+                <version>${stringer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.zzkingcc</groupId>
                 <artifactId>stringer-example</artifactId>
                 <version>${stringer.version}</version>
             </dependency>
+
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>5.10.3</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
+        </plugins>
+    </build>
 </project>

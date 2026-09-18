@@ -1,0 +1,469 @@
+# Stringer 设计文档
+
+本文件描述 Stringer 的静态设计：形态、模块、组件职责、数据模型、状态机、约束与配置。所有接口签名见 `API.md`，配置与接入实操见 `INSTANCE.md`。
+
+---
+
+## 1 系统定位与交付形态
+
+Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形态为三件套：
+
+| 交付物 | 模块 | 部署位置 |
+| --- | --- | --- |
+| 服务端（独立进程） | `stringer-server` | 客户自部署，端口 `9527`（`server.port` / `STRINGER_SERVER_PORT`） |
+| 消费侧 starter | `stringer-spring-boot-starter` | 引入调用方业务应用，提供 `AgentService` 与 `KnowledgeBaseClient` Bean，并传递 `common` 与工具实例 SDK（工具能力默认关闭） |
+| 工具实例 SDK | `stringer-tool-instance` | 引入工具提供方应用，把本地方法注册到服务端 |
+
+形态约束：
+
+- 服务端不提供开箱业务 Controller，只暴露 `AgentService` Bean；调用方身份（`profile` / `tenantId` / `userId`）由宿主填入请求。
+- 服务端 **不内置任何业务知识文档**；文档由部署方通过上传接口导入。
+- 服务端不做 SaaS：**单实例部署**——工具注册表在进程内存、知识库导入为进程内串行锁、判死扫描为进程内定时器，因此多实例不成立；扩容只能纵向。
+- 停机为**优雅停机**（`server.shutdown=graceful`，等待上限 30s）：先停止接收新请求，在途请求（含 SSE 长连接）收尾后再退出。
+- 工具可来自两个位置——调方进程内的本地 Bean，或独立进程的工具实例（通过 HTTP 注册）。
+
+---
+
+## 2 模块划分
+
+| 模块 | 职责 | 主要包 |
+| --- | --- | --- |
+| `stringer-api` | 对外契约：错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService` 接口 | `api.code` `api.annotation` `api.tool` `api.agent` `api.support` |
+| `stringer-common` | 异常基类与通用工具 | `common.exception` `common.util` |
+| `stringer-domain` | 领域能力：知识检索、混合重排、会话记忆约束 | `domain.capability.knowledge` `domain.rag` `domain.memory` |
+| `stringer-infrastructure` | 外部依赖适配：ES 检索器与索引管理、文档摄取与切片、Redis 记忆与检查点、向量化 | `infrastructure.elasticsearch` `infrastructure.ingestion` `infrastructure.redis` `infrastructure.embedding` |
+| `stringer-runtime` | 运行时内核：编排图、工具注册表与路由、实例注册表、流式上下文、提示词解析、取消 | `runtime.graph` `runtime.tool` `runtime.stream` `runtime.prompt` `runtime.cancellation` `runtime.orchestration` |
+| `stringer-server` | 服务端：配置装配、管控接口、鉴权、设置存储、异常处理出口、静态管控台 | `server.config` `server.controller` `server.auth` `server.settings` `server.knowledge` `server.advice` `server.prompt` |
+| `stringer-spring-boot-starter` | 接入方客户端：凭证管理、`AgentServiceClient`、`KnowledgeBaseClient`、启动连通性探测 | `starter.client` |
+| `stringer-tool-instance` | 工具实例 SDK：注解扫描、注册与心跳、反向调用端点 | `toolinstance` |
+| `stringer-example` | 接入示例（含示例知识文档与示例工具），不随服务端交付 | `example` |
+
+依赖方向：`api → common → domain → infrastructure → runtime → server`；`starter` 与 `tool-instance` 独立于上述链，`tool-instance` 不依赖任何 Stringer 模块（与服务端只通过 HTTP 报文耦合）。
+
+消费侧依赖边界：`stringer-spring-boot-starter` 是唯一接入坐标，聚合 `stringer-api`（契约）、`stringer-common`（异常与输入安全）、`stringer-tool-instance`（工具实例 SDK），引入即同时具备「调 AI」与「提供工具」两种能力；工具能力默认关闭——`tool-instance` 的自动装配整体受 `stringer.tool-instance.enabled=true` 约束，未开启时不注册回调端点、不启动心跳。聚合的依赖成本为零：`common` 只依赖 `api`，`tool-instance` 的依赖（`spring-web` / `spring-boot-autoconfigure` / `jackson-databind` / `slf4j-api`）全部已在 starter 既有依赖树内。`stringer-tool-instance` 仍保留独立坐标供纯工具方（工具微服务、非 Java 应用）使用，其「不依赖任何 Stringer 模块」的契约不变。**Web 容器始终归宿主**：starter 与 `tool-instance` 都只用 `spring-web` 的注解模型，不引容器；宿主已有 Servlet 栈时两者共存仍判定为 SERVLET，若把容器写进 SDK，纯 WebFlux 宿主会被判成 SERVLET 而失去 `DispatcherHandler` 装配。
+
+---
+
+## 3 运行时调用链路
+
+```
+调用方（业务应用，含 starter）
+  │  POST /api/agent/chat    Header: X-Stringer-Credential
+  ▼
+ServerAgentController ──► AgentOrchestrationService ──► agentExecutor 线程池
+                                    │
+                                    ▼
+                        LangGraph4j 编排图（检查点存 Redis）
+                        ┌─────────────┐
+                        │  agentNode  │ 注入 SystemMessage + 本轮可见工具集
+                        └──────┬──────┘
+                               │ 有工具调用
+                        ┌──────▼──────┐        ┌──────────────┐
+                        │  toolsNode  │───────►│  ToolRouter   │  实时读注册表
+                        └──────┬──────┘        └──────┬───────┘
+                               │                      │ 本地 Bean / 远程实例
+                               │ 命中审批策略          ▼
+                        ┌──────▼──────┐        POST {endpoint}
+                        │ reviewNode  │        （工具实例）
+                        └─────────────┘
+                               │ 中断
+                               ▼
+                 SSE 事件流（TOKEN / TOOL_CALL / TOOL_RESULT / INTERRUPT / STOPPED / ERROR / DONE）
+```
+
+- 会话身份：`sessionId` 为唯一键；`profile` 是 per-request 参数，会话不绑定域。
+- 每个执行单元（一次 `orchestrate` 及其全部 `resume`）内，`profile` 与提示词冻结；单元之间取最新值。
+- 记忆、检查点、流式上下文三者相互独立：记忆存 Redis（`stringer:chat:memory:*`），检查点存 Redis（`graph:checkpoint:*`），事件流只走 HTTP 响应。
+
+---
+
+## 4 域（Profile）与工具可见性
+
+| 项 | 规定 |
+| --- | --- |
+| 定义 | 域＝一次对话的场景，同时绑定【工具集 + 系统提示词】 |
+| 创建与销毁 | 由工具注解 `@StringerTool.profiles()` 派生，**不可手工新建或删除**；一经某个工具声明过，域就常驻（工具被断开时域仍在，只是该域下暂无工具），因此不受实例熔断 / 判死影响 |
+| 可见性判定 | 工具的 `profiles` 留空＝全域可见；否则仅声明了本轮 `profile` 的工具进入模型视野 |
+| 维度数量 | 域是工具可见性的 **唯一维度**，不叠加第二个权限维度 |
+| `profile` 缺失 | 请求未带 `profile` 报错；`profile` 为空字符串报错 |
+| 域不存在 | fail-fast 返回 `10004`，**绝不回退为全量工具**；判据是"该域是否被声明过"，与"此刻有没有工具"无关 |
+| 同源性约束 | 模型可见工具集与需审批工具集必须来自同一判定（`ToolRegistry.toolSpecifications` 与 `toolsRequiringApproval` 同源）；拒绝文案分两种：域外 `10001`、工具已下线 `80001` |
+| 已知域集合为空 | 当所有工具均为全域可见（无任何工具声明过域）时，接受任意域，不报 `10004` |
+| 工具视图不取快照 | 每轮实时读注册表；不缓存工具集快照 |
+
+---
+
+## 5 工具体系
+
+### 5.1 注解契约（`stringer-api/annotation`）
+
+| 注解 | 目标 | 字段 | 默认值 |
+| --- | --- | --- | --- |
+| `@StringerTool` | METHOD | `name` | `""`（留空取方法名；全局唯一，重名注册失败） |
+| | | `description` | 必填 |
+| | | `category` | `"default"`（仅管理页分类，不参与过滤） |
+| | | `profiles` | `{}`（留空＝全域可见） |
+| | | `version` | `"1.0.0"` |
+| | | `sideEffect` | `SideEffect.READ`（`READ`/`WRITE`/`DESTRUCTIVE`） |
+| | | `idempotent` | `true` |
+| | | `toModel` | `true` |
+| `@ToolParam` | PARAMETER / FIELD / RECORD_COMPONENT | `name` | `""`（留空取形参名） |
+| | | `description` | 必填 |
+| | | `required` | `true` |
+| | | `example` | `""` |
+| | | `allowValues` | `{}` |
+| | | `sensitive` | `false` |
+| `@ToolPolicy` | METHOD | `approval` | `@Approval` |
+| `@Approval` | 嵌套 | `mode` | `Mode.NONE`（`NONE`/`ALWAYS`/`CONDITIONAL`/`ONCE_PER_SESSION`） |
+| | | `condition` | `""` |
+| | | `reason` | `""` |
+| | | `approverRoles` | `{"tenant:admin"}` |
+| | | `timeoutSeconds` | `300` |
+| | | `onTimeout` | `OnTimeout.REJECT`（`REJECT`/`ABORT`） |
+| | | `payloadFields` | `{}` |
+
+实际生效范围（当前实现）：
+
+- 使用前提：工具所在类实现 `StringerToolProvider` 并注册为 Spring Bean，才会被 `AnnotatedToolScanner` 扫描。
+- 参数结构由反射推导（`String`/`int`/`boolean`/`enum`/`List<T>`/`record DTO` → JSON Schema 的 `type`/`properties`/`required`），注解只补语义。
+- 审批判定只看 `Approval.mode` 是否非 `NONE`；`CONDITIONAL` 与 `ONCE_PER_SESSION` 当前与 `ALWAYS` 等价。
+- 仅登记、不参与运行行为：`idempotent`、`toModel`、`sensitive`、`condition`、`approverRoles`、`timeoutSeconds`、`onTimeout`、`payloadFields`。
+
+### 5.2 工具来源
+
+| 来源 | 触发时机 | 注册路径 | 副本表示 |
+| --- | --- | --- | --- |
+| 本地 Bean | 启动期扫描 | `StringerToolProvider` → `AnnotatedToolScanner` | 单元素 `local` |
+| 远程实例 | 运行期整包心跳 | `POST /api/agent/tools/register` | `instanceId` + `endpoint` |
+
+两个来源写入同一个内存注册表 `ToolRegistry`；注册表不落盘。本地工具与远程工具对模型和管控台完全透明。
+
+### 5.3 注册表结构
+
+| 项 | 规定 |
+| --- | --- |
+| 条目 | `Registered(ToolDescriptor descriptor, ToolSpecification specification, ToolExecutor executor, List<InstanceEndpoint> endpoints)`，不可变 |
+| 副本端点 | `InstanceEndpoint(String instanceId, String endpoint)` |
+| 反向索引 | `byInstance`：`instanceId → 该实例声明的工具名集合` |
+| 更新语义 | 按 `instanceId` 整包替换：本次心跳的声明为准（地址无条件校对；描述、域归属等变更以本次为准） |
+| 移除语义 | 只删该实例的副本；副本列表为空才整条移除条目，域随之消失 |
+| 重名 | 同名工具的多个实例＝多副本；路由在副本间轮选，传输层失败换下一个副本（最多 `invoke-max-attempts` 次，默认 2）；业务失败不重试 |
+| 并发 | 不可变对象 + `compute` 原子替换；读端无锁 |
+| `.source()` | 本地 `包名.类名#方法名`；远程 `remote://{instanceId}@{endpoint}`（仅排障展示，不参与路由） |
+| 声明不一致 | 多副本声明不一致时取首份，其余仅告警 |
+
+### 5.4 实例生命周期
+
+| 状态 | 含义 |
+| --- | --- |
+| `ONLINE` | 在线，副本可路由 |
+| `DRAINING` | 已判死，正在清理副本（不截断会话） |
+| `OFFLINE` | 清理完成，从在线表移除；重新心跳可回 `ONLINE` |
+| `FORCE_OFFLINE` | 管理员强制下线：立即清副本，再次心跳返回 `410`；标记有保留窗，过期后可重新注册 |
+
+| 参数 | 默认值 | 行为 |
+| --- | --- | --- |
+| 心跳周期 | 10s | 实例侧定时整包上报 |
+| `stringer.instance.timeout-seconds` | 30 | 超过该时长未收到心跳即判死 |
+| `stringer.instance.scan-interval-ms` | 5000 | 服务端定时扫描判死，与流量解耦 |
+| `stringer.instance.force-offline-retention-seconds` | 3600 | 强制下线标记保留时长 |
+| `stringer.instance.invoke-timeout-ms` | 30000 | 单次反向调用超时 |
+| `stringer.instance.invoke-max-attempts` | 2 | 传输层失败时尝试的不同副本数上限 |
+
+- 实例下线 **不截断会话**：会话属于域，不属于实例。
+- 同一实例的状态标记与副本清理必须在同一把实例锁内一次完成。
+
+### 5.5 工具执行与审批
+
+- 执行前检查取消标志；工具不可见或已下线时不执行，回文本给模型。
+- 命中审批的工具：发出 `INTERRUPT` 事件并中断图，等待调用方 `resume`。
+- `resume` 必须携带 `profile`；执行 `resume` 时按**本次域**重新校验工具可见性（工具已下线也拦下）。
+- `resume` 只接受中断时的那个域；域不一致直接拒绝。
+- 请求入口若发现断点停在审批点，拒绝该轮 `chat`（`30002`），不清理断点。
+- 同一 `sessionId` 不允许并发：已在执行时直接拒绝（`30003`），不排队。
+
+---
+
+## 6 会话、记忆与检查点
+
+| 项 | 规定 |
+| --- | --- |
+| 会话键 | `sessionId`，字符串，由调用方提供 |
+| 记忆内容 | 仅用户消息与最终 AI 回答；工具调用与工具结果不进记忆 |
+| 记忆约束 | `stringer.memory.max-messages`＝100、`max-tokens`＝30000、`ttl`＝72h |
+| 检查点 | LangGraph4j 检查点存 Redis，`stringer.memory.checkpoint-ttl`＝24h |
+| 记忆与检查点的域关系 | 域是 per-request；记忆按 `sessionId` 唯一键，跨域共享同一份 |
+| 停止语义 | `stop` 只置取消标志，由 `agentNode.onPartialResponse` 与 `toolsNode` 在工具执行前检查后抛出；随后回滚本轮记忆、清检查点、推 `STOPPED`、结束流 |
+
+消息通道：图的 `messages` 通道使用去重被禁用的追加器（`appenderWithDuplicate`），允许同内容消息重复入列。
+
+---
+
+## 7 系统提示词
+
+| 项 | 规定 |
+| --- | --- |
+| 组成 | `公共基线 + 域差异` 拼接为一条 `SystemMessage` |
+| 来源与优先级 | `config/profiles.json`（高） > yaml（`stringer.ai.prompt.base` 与 `stringer.ai.prompt.profiles.*`，低） |
+| 拼接标记 | 服务端在域差异前后加 `PROFILE_BEGIN` / `PROFILE_END` 边界标记（标记文案由接口下发，前端不重复实现） |
+| 域差异缺省 | 允许为空，此时只用基线并记一条 WARN |
+| 生效时机 | 执行单元内冻结；单元之间取最新值；`resume` 沿用中断时注入的那份 |
+| 替换语义 | 整体替换，不支持追加 |
+| 注入方式 | 编排层注入"提示词解析器"而非提示词字符串 |
+
+提示词是软引导，不构成能力边界：工具不可见时不会出现在提示词与工具集中。
+
+---
+
+## 8 知识库与检索
+
+### 8.1 文档模型
+
+| 项 | 规定 |
+| --- | --- |
+| 导入方式 | 部署方上传（管控台 / HTTP / starter），服务端不内置文档 |
+| 支持类型 | `stringer.rag.allowed-extensions`，默认 `md`、`txt`、`markdown`、`text` |
+| 大小上限 | `stringer.rag.max-file-size`，默认 10MB |
+| 同一性判定 | 同名**不区分大小写**；默认拒绝，带 `replace=true` 则先删旧再写入 |
+| 删除语义 | 删除该文档全部切片，并释放文件名（删除后可重新上传同名） |
+| 唯一键 | `doc_id`（UUID，删除与聚合的依据）与 `file_name`（展示与同名校验） |
+| 切片元数据 | `doc_id`、`file_name`、`file_name_lower`、`upload_time`、`section_title` |
+| 切片规则 | 按中文章节边界（`一、` `二、` `三、` 等）切分，超长段落退化为递归切分 |
+| 并发 | 导入全局串行，等待上限 `stringer.rag.ingest-lock-wait-seconds`（默认 60s） |
+| 失败处理 | 导入失败回滚本次已写入的切片；失败必须上抛，不得返回成功计数 |
+
+### 8.2 索引与检索
+
+| 项 | 规定 |
+| --- | --- |
+| 索引名 | `stringer.rag.index-name`，默认 `stringer_knowledge` |
+| 索引创建 | 不存在时自动创建，映射含 IK 中文分词配置 |
+| 启动行为 | 只建索引、不灌库（`bootstrap-enabled`）；灌库失败不阻断启动（`bootstrap-strict` 默认 false）；`delete-on-startup` 默认 false |
+| 检索方式 | 向量检索与关键词检索并行发起，分数融合重排后取 `top-n` |
+| 权重 | `vector-weight`＝0.6、`keyword-weight`＝0.4、`title-boost`＝0.15、`file-name-boost`＝0.10 |
+| 超时 | `stringer.retrieval.timeout-ms`＝5000（始终为有限值） |
+| 空结果 | 返回"未检索到相关内容"文本；服务不可用返回"知识库检索服务当前不可用…"——两态分离 |
+| 重建 | 删除索引并按当前维度重建，**索引内容清空，需重新上传文档** |
+
+知识检索以 `KnowledgeSearchService` 形式提供，由部署方通过 `@StringerTool` 暴露为工具；服务端不自带示例工具。
+
+---
+
+## 9 模型配置
+
+| 项 | 规定 |
+| --- | --- |
+| 配置来源 | `config/llm-settings.json`（运行时，高） > yaml `stringer.ai.*`（低） |
+| 文本模型字段 | `chatBaseUrl`、`chatApiKey`、`chatModelName`、`chatTemperature`（0~2，默认 0.5）、`chatMaxTokens`（默认 2048） |
+| 向量模型字段 | `embeddingBaseUrl`、`embeddingApiKey`、`embeddingModelName`、`embeddingDimensions`（可空） |
+| 回落规则 | 向量模型地址与 Key 留空时复用文本模型的值 |
+| 空值语义 | 留空＝保持原值不变 |
+| 状态三态 | `未配置`（必填项有空） / `已配置·未验证`（填齐未测或已改动） / `已连接` |
+| 指纹 | `baseUrl + modelName + SHA-256(apiKey)`，文本与向量各存一份 |
+| 装配方式 | `LlmModelHolder` 委托代理：`openAiChatModel`、`openAiStreamingChatModel`、`openAiEmbeddingModel`；替换为原子替换，注入点不变 |
+
+### 向量维度契约
+
+维度取值的**唯一入口**是 `LlmModelHolder#effectiveEmbeddingDimension()`，以下三处必须同源：
+
+1. 测试连接读取的实测维度（读返回向量的实际长度）；
+2. 运行时 `EmbeddingModel` 构建时传入的 `dimensions`；
+3. ES 建索引时的 `dense_vector` 维度。
+
+| 用户输入 | 行为 |
+| --- | --- |
+| `embeddingDimensions` 留空 | 请求不带 `dimensions`，索引取实测默认维度 |
+| 显式声明 | 请求带 `dimensions=声明值`；实测与声明一致才通过 |
+
+保存时的四态预检结果：`OK`（直接保存）、`NEEDS_REBUILD`（索引维度≠实测，需二次确认后保存并重建）、`DECLARED_MISMATCH`（声明≠实测，拒绝保存）、`UNKNOWN`（无法实测，放行并提示）。
+
+---
+
+## 10 存储配置（Elasticsearch / Redis）
+
+| 项 | 规定 |
+| --- | --- |
+| 配置来源 | `config/infra-settings.json`（高） > yaml / 环境变量（低） |
+| 字段 | ES：`host`、`port`（9200）、`scheme`（http）、`username`、`password`、`connectTimeout`（5000）、`socketTimeout`（10000）；Redis：`host`、`port`（6379）、`password`、`database`（0） |
+| 未配置判据 | `host` 为 null 即未配置；两位点均空时启动照常，跳过建索引并只打 INFO |
+| 热替换 | `InfraSettingsHolder.apply()` → `SwappableElasticsearchTransport.swap()` / `SwappableRedisConnectionFactory.swap()`，volatile 原子替换；旧连接延迟 30s 关闭 |
+| 守卫位置 | ES 只守 `performRequest` / `performRequestAsync`；Redis 只守 `getConnection` / `getClusterConnection` / `getSentinelConnection`；守卫只抛异常、不打日志 |
+| 能力探测 | ES 判读 9.x / 8.x / 7.17 / 更低或 OpenSearch / 读不到；一律不阻断保存。IK 分词器探测 `POST /_analyze` 试 `ik_max_word`：可用 / 确认未安装 / 未探测 |
+| 换址后果 | ES 换实例后需重建索引；Redis 换地址或库号＝换数据源，历史会话与断点留在旧库不迁移 |
+
+---
+
+## 11 鉴权与凭证
+
+| 项 | 规定 |
+| --- | --- |
+| 账号 | 单一账号，无角色、无权限分级。默认种子 `stringer` / `stringer`，由 `classpath:accounts-seed.json` 落盘为 `config/accounts.json` |
+| 密码存储 | BCrypt 哈希 |
+| 凭证格式 | `base64url(payload) + "." + base64url(HMAC(派生密钥, payload))` |
+| 派生密钥 | `HMAC(主密钥, passwordHash)` ⇒ 改密码后全部旧凭证立即失效 |
+| 有效期 | 无 TTL |
+| 载具 | `/api/agent/**` 用请求头 `X-Stringer-Credential`；`/admin/**` 用 HttpOnly Cookie `stringer_admin`，无 Cookie 时回退读同一请求头（供 starter / ETL 程序化调用） |
+| 免检路径 | 被拦截前缀内的免检项：`/api/agent/login`、`/admin/login`、`/admin/init`、`/admin/session`、登录页与静态资源、`/error`、`/favicon.ico`；`OPTIONS` 请求一律放行。另有 `GET /health` 存活探测，不在被拦截的前缀之下，天然免鉴权 |
+| 账号文件两态 | 文件不存在（合法初始态）→ 放行并开放 `/admin/init`；文件存在但解析失败 → 一律拒绝（`10007`），且不开放初始化入口 |
+| 登录写盘 | 仅记录最后登录时间与来源，写盘失败只告警，不阻断登录 |
+| 恢复路径 | 唯一恢复手段是删除 `config/accounts.json` 后重启；无密保、无重置接口 |
+
+---
+
+## 12 错误处理
+
+| 项 | 规定 |
+| --- | --- |
+| 错误码载体 | `stringer-api` 的 `ErrorCode`，五元组：`code` / `message` / `httpStatus`（建议值，非契约） / `retryable` / `action` |
+| 码段 | `10xxx` 权限与鉴权 / `20xxx` 限流与容量 / `30xxx` 编排与会话 / `40xxx` 客户端与入参 / `50xxx` 系统通用 / `60xxx` 知识库 / `70xxx` 记忆与检查点 / `80xxx` 工具调用 / `90xxx` 大模型与外部依赖 |
+| 三条通道 | SSE 事件的 `code`；非流式响应体的 `code`；starter 侧异常携带的 `ErrorCode` |
+| 非流式出口 | `ServerGlobalExceptionHandler`（`@RestControllerAdvice`） |
+| 流式出口 | `AgentEvent.ERROR` 帧（HTTP 状态已是 200，`code` 是唯一真相） |
+| 响应体字段 | `code`、`codeName`、`error`、`detail`、`retryable`、`action`、`traceId`、`timestamp` |
+| 成功响应 | 统一带 `code=0` 的接口：`health`、`stop`、`init`、`login`、`logout`、`session`、`changePassword`、`agentLogin` |
+| 日志级别 | 默认记录 ERROR；以下降级为 WARN 且不打堆栈：`NotConfiguredException`、`AuthException`、`CancellationException`、`NoResourceFoundException`、参数与请求体类异常 |
+| 存储类失败判定 | 按异常栈中是否出现 `Swappable*` 或 ES / Redis 客户端包名判定，映射 `90004`；未配置映射 `90005` |
+| traceId | 生成于 `api.support.TraceId`，请求入口 `begin`、出口 `end`，同步写 MDC；`end` 必须调用 |
+
+完整码表见 `API.md` 第 5 节。
+
+---
+
+## 13 日志
+
+| 项 | 规定 |
+| --- | --- |
+| 控制台格式 | `时间 级别 [traceId] [线程] logger - 消息`，ANSI 着色 |
+| 配色 | DEBUG/TRACE 不上色、INFO 蓝、WARN 黄、ERROR 红；traceId 青；线程名不上色。级别是整行唯一强调色，三档不加粗 |
+| 默认输出 | **仅控制台**。应用只写"事件流"，落盘、轮转、保留与采集交给部署平台 |
+| 文件输出（可选） | 加启动参数 `--logging.config=classpath:logback-file.xml` 切换到文件形态；启动横幅会打印当前状态与开启命令 |
+| 文件与滚动 | `{path}/stringer-server.log` 全量（按天 + 单文件 50MB，保留 30 天 / 总量 2GB）；`{path}/stringer-server-error.log` 仅 ERROR（保留 60 天 / 总量 1GB） |
+| 审计 | 独立 logger 名 `AUDIT`，格式 `action=… operator=… result=… ip=…`；文件形态下另写 `{path}/stringer-server-audit.log`（保留 180 天）。**只记变更类请求**（`/admin/**` 的非 GET/HEAD/OPTIONS 与工具实例注册） |
+| 文件路径 | `stringer.logging.path`，默认 `/var/log/stringer`（服务器绝对路径，可用 `STRINGER_LOG_PATH` 覆盖） |
+| 级别 | `stringer.logging.level`，默认 INFO |
+| 是否已启用文件输出 | 以 root logger 上是否挂着文件 appender 为准（运行事实），不读配置文本 |
+| 级别准则 | 需要人工介入＝ERROR；需关注或已自愈降级＝WARN；关键节点＝INFO；排查细节＝DEBUG |
+| 未配置的表达 | 启动期只以横幅 INFO 陈述；调用期未配置才 WARN（`90005`）；配了但连不上为 ERROR（`90004`） |
+| 敏感红线 | 禁止入日志：凭证与密钥（LLM / ES / Redis）、用户消息全文、身份证 / 手机号 / 银行卡 |
+| 允许入日志 | 主机、端口、库号、索引名、耗时、数量、traceId、状态码 |
+| 第三方降噪 | 默认压到 WARN：`dev.langchain4j`、`org.apache.http.wire`、`io.netty`、`reactor.netty`、`org.elasticsearch`、`co.elastic.clients`、`io.lettuce`、`org.springframework.web` |
+
+---
+
+## 14 并发模型
+
+| 线程池 | 位置 | 线程名 | core / max / queue | 拒绝策略 | 销毁 |
+| --- | --- | --- | --- | --- | --- |
+| 图编排 | `GraphConfiguration` | `stringer-agent-N` | 8 / 32 / 200 | AbortPolicy | daemon + `shutdownNow` |
+| 混合检索 | `RetrievalConfiguration` | `stringer-retrieval-N` | 4 / 16 / 200 | AbortPolicy | daemon + `shutdown` |
+| 知识库导入 | `KnowledgeBaseService` | `stringer-kb-ingest-N` | 2 / 2 / 16 | AbortPolicy | daemon + `@PreDestroy` |
+| 实例心跳 | `ToolInstanceClient` | 单线程 | 1 / — / — | — | daemon |
+| 判死扫描 | `InstanceLifecycle` | Spring 单线程 | — | — | 容器托管 |
+
+线程池参数外置：`stringer.agent.*`、`stringer.retrieval.*`、`stringer.rag.ingest-pool-size`、`stringer.rag.ingest-queue-capacity`。
+
+| 同步原语 | 位置 | 保护的临界区 |
+| --- | --- | --- |
+| 条带锁 `StripedLocks`（固定 64 槽） | `InstanceRegistry`、`ToolRegistry` | 同一 `instanceId` 的心跳、判死、强制下线、副本替换 |
+| `synchronized(this)` | `ClientCredential`、`ToolInstanceClient`、`AccountStore`、`SwappableRedisConnectionFactory` | 换凭证、账号读写、连接工厂热替换 |
+| `synchronized(writeLock)` | `AuthService` | 初始化 / 登录写盘 / 改密码的整段"读-改-写" |
+| `Semaphore(1)` | `KnowledgeBaseService` | 知识库导入串行与重名校验 |
+| `ConcurrentHashMap` + `compute` | `ToolRegistry`、`CancellationRegistry`、`ProfileSystemPromptResolver` | 条目原子替换、停止标志、告警去重 |
+
+必须串行的边界：同一 `sessionId` 的对话；知识库导入；同一实例的注册表更新；账号与配置的写盘。
+
+配置写盘一律经 `AtomicFiles`（临时文件 + `ATOMIC_MOVE`）。
+
+---
+
+## 15 配置项总表
+
+下表为代码绑定的配置键。yaml 中 `stringer.ai.*` 与 `stringer.elasticsearch.*` 两段整体以注释保留，运行时的模型与连接信息以管控台落盘文件为准（见 §9、§10）。
+
+| 键 | 类型 | 默认值 |
+| --- | --- | --- |
+| `server.port` | int | 9527（可被 `SERVER_PORT` / `STRINGER_SERVER_PORT` 覆盖） |
+| `stringer.settings.path` | String | `/var/lib/stringer/config` |
+| `stringer.logging.path` | String | `/var/log/stringer` |
+| `stringer.logging.level` | String | `INFO` |
+| `stringer.ai.prompt.base` | String | yaml 内定义 |
+| `stringer.ai.prompt.profiles` | Map | `{}` |
+| `stringer.redis.host` | String | null |
+| `stringer.redis.port` | int | 6379 |
+| `stringer.redis.password` | String | null |
+| `stringer.redis.database` | int | 0 |
+| `stringer.redis.timeout` | Duration | 2000ms |
+| `stringer.redis.pool.max-active` / `max-idle` / `min-idle` | int | 8 / 8 / 0 |
+| `stringer.redis.pool.max-wait` | Duration | -1ms |
+| `stringer.memory.max-messages` | int | 100 |
+| `stringer.memory.max-tokens` | int | 30000 |
+| `stringer.memory.ttl` | Duration | 72h |
+| `stringer.memory.checkpoint-ttl` | Duration | 24h |
+| `stringer.agent.core-pool-size` / `max-pool-size` / `queue-capacity` / `keep-alive-seconds` | int / long | 8 / 32 / 200 / 60 |
+| `stringer.instance.timeout-seconds` | long | 30 |
+| `stringer.instance.force-offline-retention-seconds` | long | 3600 |
+| `stringer.instance.scan-interval-ms` | long | 5000 |
+| `stringer.instance.invoke-timeout-ms` | int | 30000 |
+| `stringer.instance.invoke-max-attempts` | int | 2 |
+| `stringer.retrieval.parallel` | boolean | true |
+| `stringer.retrieval.timeout-ms` | long | 5000 |
+| `stringer.retrieval.core-pool-size` / `max-pool-size` / `queue-capacity` | int | 4 / 16 / 200 |
+| `stringer.retrieval.vector-weight` / `keyword-weight` | double | 0.6 / 0.4 |
+| `stringer.retrieval.title-boost` / `file-name-boost` | double | 0.15 / 0.10 |
+| `stringer.retrieval.top-n` | int | 10 |
+| `stringer.rag.index-name` | String | `stringer_knowledge` |
+| `stringer.rag.delete-on-startup` | boolean | false |
+| `stringer.rag.bootstrap-enabled` | boolean | true |
+| `stringer.rag.bootstrap-strict` | boolean | false |
+| `stringer.rag.max-file-size` | DataSize | 10MB |
+| `stringer.rag.allowed-extensions` | List | `[md, txt, markdown, text]` |
+| `stringer.rag.ingest-lock-wait-seconds` | long | 60 |
+| `stringer.rag.ingest-pool-size` / `ingest-queue-capacity` | int | 2 / 16 |
+| `spring.web.resources.cache.cachecontrol.no-cache` | boolean | true |
+| `stringer.server.host` / `port` | String / int | localhost / 9527 |
+| `stringer.server.username` / `password` | String | stringer / stringer |
+| `stringer.client.health-check-timeout` / `connect-timeout` / `read-timeout` | Duration | 5s / 5s / 10m |
+| `stringer.tool-instance.enabled` | boolean | false |
+| `stringer.tool-instance.instance-id` | String | — |
+| `stringer.tool-instance.endpoint` | String | 留空按本进程端口推导 |
+| `stringer.tool-instance.heartbeat-interval-seconds` | int | 10 |
+| `stringer.tool-instance.max-backoff-seconds` | int | 60 |
+| `stringer.tool-instance.request-timeout-millis` | int | 10000 |
+
+---
+
+## 16 落盘文件
+
+| 文件 | Store | 顶层字段 |
+| --- | --- | --- |
+| `config/accounts.json` | `AccountStore` | `username`、`passwordHash`、`signingKey`、`createdAt`、`lastLoginAt`、`lastLoginFrom` |
+| `config/llm-settings.json` | `LlmSettingsStore` | `chatBaseUrl`、`chatApiKey`、`chatModelName`、`chatTemperature`、`chatMaxTokens`、`embeddingBaseUrl`、`embeddingApiKey`、`embeddingModelName`、`embeddingDimensions` |
+| `config/infra-settings.json` | `InfraSettingsStore` | `es{host,port,scheme,username,password,connectTimeout,socketTimeout}`、`redis{host,port,password,database}` |
+| `config/profiles.json` | `ProfileSettingsStore` | `base`、`profiles`（域名 → 提示词） |
+
+- 目录由 `stringer.settings.path` 指定，默认 `/var/lib/stringer/config`（服务器绝对路径）；容器化把该目录挂成卷。
+- 落盘内容为"用户填写的那一份"，不是合并后的生效值。
+- 工具注册与域不落盘。
+
+---
+
+## 17 管控台
+
+| 项 | 规定 |
+| --- | --- |
+| 入口 | `http://localhost:9527/admin.html`（转发到 `console/overview.html`）；登录页 `console/login.html` |
+| 页面 | 8 项：概览、模型设置、存储配置、域空间、在线实例、提示词设定、知识库、账号 |
+| 静态资源 | `static/admin.html` + `static/console/*.html` + `console/assets/console.css`、`console/assets/console.js`；零依赖、不引 CDN |
+| 导航 | 由 `console.js` 的 `renderSidebar()` 渲染；新增页面＝落一个 HTML + 在导航数组加项（图标名须已存在于图标表中） |
+| 登录守卫 | 在 `console.js` 中统一实现（加载时查 `/admin/session`，收到 `10002` 跳登录页）；登录页用 `window.CONSOLE_NO_AUTH_GUARD = true` 关闭守卫 |
+| 同源要求 | 必须从服务端地址打开：凭证是 Cookie，跨站时不保存也不携带 |
+| 缓存 | 静态资源已设 `no-cache` |
+| 侧栏提示 | 「模型设置」的告警点由 `/admin/settings` 的 `chatConfigured` 驱动 |
+| 域的呈现 | 「域空间」与「提示词设定」是同一事实的两个视图；前端不重算工具可见性 |
+| 服务端依赖 | 页面不内置任何配置数据，全部经 `/admin/**` 读取 |
+
+---
+
+## 18 对外接口索引
+
+接口签名、报文、事件契约、错误码与 SDK 用法见 `API.md`。

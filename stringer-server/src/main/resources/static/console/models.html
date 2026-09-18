@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模型设置 · Stringer 管控台</title>
+    <link rel="stylesheet" href="assets/console.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="main">
+        <div class="page-head">
+            <div class="head-line">
+                <div>
+                    <h2>模型设置</h2>
+                    <p>配置 OpenAI 兼容服务商。此处填写的配置<b>优先级高于服务端 yaml</b>，
+                        保存后立即生效，无需重启。<b>两个模型各自独立保存</b>，互不影响；
+                        留空的字段自动回落到 yaml 配置。</p>
+                </div>
+                <button class="ghost" id="reloadBtn">刷新</button>
+            </div>
+        </div>
+
+        <div id="settingsStatus" class="status-line warn"><span>加载中…</span></div>
+
+        <!-- ============ 模型一：对话模型 ============ -->
+        <section class="card model-card" id="card-chat">
+            <header class="card-head">
+                <span class="model-dot"></span>
+                <h2>对话模型</h2>
+                <span class="mbadge" id="chatBadge">—</span>
+                <span class="dirty" id="chatDirty" style="display:none;">● 有未保存修改</span>
+                <span class="spacer"></span>
+                <span class="card-note">Agent 编排 / 对话生成</span>
+            </header>
+
+            <div class="field">
+                <label>服务商地址（OpenAI 兼容 baseUrl）</label>
+                <input id="chatBaseUrl" class="mono" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+                <div class="help">需含到版本号为止的完整路径，结尾不带斜杠。兼容 OpenAI 协议的服务商均可。</div>
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label>API Key</label>
+                    <input id="chatApiKey" type="password" class="mono" placeholder="留空表示不修改">
+                    <div class="help" id="chatKeyHelp">当前未配置</div>
+                </div>
+                <div class="field">
+                    <label>模型名</label>
+                    <div class="combo">
+                        <input id="chatModelName" class="mono" placeholder="qwen-plus"
+                               autocomplete="off" role="combobox" aria-expanded="false"
+                               aria-controls="chatModelMenu" aria-autocomplete="list">
+                        <button type="button" class="combo-btn" title="从服务商获取模型列表"
+                                aria-label="展开模型列表">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        <div class="combo-menu" id="chatModelMenu" role="listbox"
+                             aria-label="模型候选" style="display:none;"></div>
+                    </div>
+                    <div class="help">
+                        可直接手动输入，也可点右侧按钮从服务商拉取列表选择；
+                        每次点击都会按<b>当前地址</b>重新拉取，<b>最终以输入框内容为准</b>。
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label>采样温度</label>
+                    <input id="chatTemperature" type="number" step="0.1" min="0" max="2" placeholder="0.5">
+                </div>
+                <div class="field">
+                    <label>单次最大 Token</label>
+                    <input id="chatMaxTokens" type="number" min="1" placeholder="2048">
+                </div>
+            </div>
+
+            <div id="chatResult" class="result"></div>
+
+            <footer class="card-foot">
+                <button class="sec" id="testChatBtn">测试连接</button>
+                <button class="sec" id="clearChatBtn"
+                        title="清空本卡片表单内容（仅影响本页，尚未生效）。保存后留空字段将回落到 yaml 配置">清空表单</button>
+                <button id="saveChatBtn">保存并生效</button>
+                <span class="hint">
+                    <b>只保存本卡片</b>，不影响向量模型。测试会真实调用一次服务商接口（消耗少量额度）。
+                </span>
+            </footer>
+        </section>
+
+        <!-- ============ 模型二：向量模型 ============ -->
+        <section class="card model-card emb" id="card-embedding">
+            <header class="card-head">
+                <span class="model-dot"></span>
+                <h2>向量模型</h2>
+                <span class="mbadge" id="embBadge">—</span>
+                <span class="dirty" id="embDirty" style="display:none;">● 有未保存修改</span>
+                <span class="spacer"></span>
+                <span class="card-note">知识库检索 / 灌库</span>
+            </header>
+
+            <div class="field">
+                <label>服务商地址（留空则复用对话模型地址）</label>
+                <input id="embeddingBaseUrl" class="mono" placeholder="留空则复用上方对话模型地址">
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label>API Key（留空则复用对话模型 Key）</label>
+                    <input id="embeddingApiKey" type="password" class="mono" placeholder="留空则复用">
+                    <div class="help" id="embeddingKeyHelp">当前未单独配置</div>
+                </div>
+                <div class="field">
+                    <label>模型名 <span style="color:var(--amber);">（必填）</span></label>
+                    <div class="combo">
+                        <input id="embeddingModelName" class="mono" placeholder="text-embedding-v3"
+                               autocomplete="off" role="combobox" aria-expanded="false"
+                               aria-controls="embeddingModelMenu" aria-autocomplete="list">
+                        <button type="button" class="combo-btn" title="从服务商获取模型列表"
+                                aria-label="展开模型列表">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        <div class="combo-menu" id="embeddingModelMenu" role="listbox"
+                             aria-label="模型候选" style="display:none;"></div>
+                    </div>
+                    <div class="help">
+                        必填：不填则向量能力视为<b>未配置</b>，知识库检索与灌库不可用。
+                        向量维度必须与 ES 索引 mapping 一致，换模型后需重建索引。
+                        列表来自服务商目录，<b>是否真的可用以「测试连接」为准</b>。
+                    </div>
+                </div>
+            </div>
+
+            <div class="field">
+                <label>向量维度<span style="color:var(--muted);">（留空 = 用服务商默认维度）</span></label>
+                <input id="embeddingDimensions" class="mono" type="number" min="1" step="1"
+                       list="dimensionOptions" placeholder="留空则用模型默认维度">
+                <datalist id="dimensionOptions">
+                    <option value="64"></option>
+                    <option value="128"></option>
+                    <option value="256"></option>
+                    <option value="512"></option>
+                    <option value="768"></option>
+                    <option value="1024"></option>
+                    <option value="1536"></option>
+                    <option value="2048"></option>
+                </datalist>
+                <div class="help">
+                    服务商接口<b>查不到</b>"该模型支持哪些维度"，所以改为<b>你声明、我们实测校验</b>：
+                    填了会随请求下发，并用返回向量的<b>实际长度</b>与声明值比对，对不上直接报错
+                    （不支持的维度会被上游静默忽略，不报错，只看状态码会误判成功）。
+                    留空则不下发该参数、按模型默认维度处理。
+                    ⚠️ <b>改维度后必须重建知识库索引</b>，否则新旧向量长度不符，写入会被 ES 拒绝。
+                    下拉只是常见值，<b>不是</b>该模型支持的值，请查服务商文档。
+                </div>
+            </div>
+
+            <div id="embeddingResult" class="result"></div>
+
+            <footer class="card-foot">
+                <button class="sec" id="testEmbeddingBtn">测试连接</button>
+                <button class="sec" id="clearEmbeddingBtn"
+                        title="清空本卡片表单内容（仅影响本页，尚未生效）。保存后留空字段将回落到 yaml 配置">清空表单</button>
+                <button id="saveEmbeddingBtn">保存并生效</button>
+                <span class="hint">
+                    <b>只保存本卡片</b>，不影响对话模型。测试返回的维度用于核对 ES 索引 mapping 是否匹配。
+                </span>
+            </footer>
+        </section>
+
+        <!-- ============ 说明与设置文件位置（只读，无操作） ============ -->
+        <section class="card">
+            <div class="hint" style="margin:0;">
+                API Key <b>不回显明文</b>，如需更换请填新值，留空表示保持不变。
+                保存按卡片各管各的，一个模型保存不会影响另一个模型。
+            </div>
+            <div class="hint" id="settingsFileHint"></div>
+        </section>
+    </main>
+</div>
+
+<script src="assets/console.js"></script>
+<script>
+    /* 每个模型的字段清单 / 输出框 / 脏标记 / 状态徽标，一处定义驱动全页 */
+    var FIELDS = {
+        chat: ['chatBaseUrl', 'chatApiKey', 'chatModelName', 'chatTemperature', 'chatMaxTokens'],
+        embedding: ['embeddingBaseUrl', 'embeddingApiKey', 'embeddingModelName', 'embeddingDimensions']
+    };
+    var RESULT = { chat: 'chatResult', embedding: 'embeddingResult' };
+    var DIRTY = { chat: 'chatDirty', embedding: 'embDirty' };
+    var BADGE = { chat: 'chatBadge', embedding: 'embBadge' };
+    var LABEL = { chat: '对话模型', embedding: '向量模型' };
+    var saved = { chat: {}, embedding: {} };
+    /* 两张卡片"已落盘是否就绪"，驱动顶部状态行；卡片各自保存后局部刷新 */
+    var CONFIGURED = { chat: false, embedding: false };
+    /* 卡片 id 与提交字段同名，这里只需要在两张卡片间搬运/占位 */
+    var OTHER = { chat: 'embedding', embedding: 'chat' };
+    var NUMERIC = { chatTemperature: 1, chatMaxTokens: 1, embeddingDimensions: 1 };
+
+    function el(id) { return document.getElementById(id); }
+    function readVal(id) { return el(id).value || ''; }
+
+    function snapshot(which) {
+        var out = {};
+        FIELDS[which].forEach(function (id) { out[id] = readVal(id); });
+        return out;
+    }
+    function restore(which, src) {
+        FIELDS[which].forEach(function (id) {
+            el(id).value = (src[id] == null) ? '' : src[id];
+        });
+    }
+    /* 只跟「已保存值」比对，避免"点一下重设没反应"的困惑 */
+    function refreshDirty(which) {
+        var list = which ? [which] : ['chat', 'embedding'];
+        list.forEach(function (w) {
+            var src = saved[w] || {}, dirty = false;
+            FIELDS[w].forEach(function (id) {
+                if (readVal(id) !== (src[id] == null ? '' : src[id])) { dirty = true; }
+            });
+            el(DIRTY[w]).style.display = dirty ? 'inline' : 'none';
+        });
+    }
+
+    function setBadge(which, ok, text) {
+        var node = el(BADGE[which]);
+        node.textContent = text;
+        node.className = 'mbadge ' + (ok ? 'ok' : 'off');
+    }
+
+    function setStatus(html, cls) {
+        var node = el('settingsStatus');
+        node.className = 'status-line ' + cls;
+        node.innerHTML = html;
+    }
+
+    /* 顶部状态行只反映"已落盘的配置是否完整"（不是测试结果）；
+       卡片各自保存后局部重算，无需整体重载页面 */
+    function renderStatus() {
+        var chatOk = CONFIGURED.chat, embOk = CONFIGURED.embedding;
+        var msg;
+        if (chatOk && embOk) {
+            msg = '模型已配置就绪';
+        } else if (chatOk) {
+            msg = '对话模型已就绪；向量模型未配置，知识库不可用（请填「向量模型」的<b>模型名</b>）';
+        } else {
+            msg = '模型尚未配置完整，聊天与知识库不可用。请填写「对话模型」的服务商地址、API Key 与模型名。';
+        }
+        setStatus('<span>' + msg + '</span>'
+            + '<span class="pill">对话 ' + (chatOk ? '✓' : '✗') + '</span>'
+            + '<span class="pill">向量 ' + (embOk ? '✓' : '✗') + '</span>',
+            (chatOk && embOk) ? 'ok' : 'warn');
+        Console.setModelsWarn(!chatOk);
+    }
+
+    function showResult(id, text, cls) {
+        var box = el(id);
+        box.textContent = text;
+        box.className = 'result show ' + (cls || '');
+    }
+
+    function loadSettings() {
+        setStatus('<span>加载中…</span>', 'warn');
+        Console.request('/admin/settings').then(function (s) {
+            el('chatBaseUrl').value = s.chatBaseUrl || '';
+            el('chatModelName').value = s.chatModelName || '';
+            el('chatTemperature').value = s.chatTemperature == null ? '' : s.chatTemperature;
+            el('chatMaxTokens').value = s.chatMaxTokens == null ? '' : s.chatMaxTokens;
+            el('embeddingBaseUrl').value = s.embeddingBaseUrl || '';
+            el('embeddingModelName').value = s.embeddingModelName || '';
+            el('embeddingDimensions').value =
+                s.embeddingDimensions == null ? '' : s.embeddingDimensions;
+
+            /* Key 不回填明文，只提示「已配置 + 掩码」 */
+            var chatKey = el('chatApiKey');
+            chatKey.value = '';
+            chatKey.placeholder = s.chatApiKeySet ? '已配置，留空不变' : '请填写 API Key';
+            el('chatKeyHelp').textContent =
+                s.chatApiKeySet ? '当前已配置：' + s.chatApiKeyMasked : '当前未配置';
+
+            var embKey = el('embeddingApiKey');
+            embKey.value = '';
+            el('embeddingKeyHelp').textContent =
+                s.embeddingApiKeyMasked ? '当前已配置：' + s.embeddingApiKeyMasked
+                    : '当前未单独配置（复用对话 Key）';
+
+            el('settingsFileHint').textContent = '设置文件：' + (s.settingsFile || '-');
+
+            CONFIGURED.chat = !!s.chatConfigured;
+            CONFIGURED.embedding = !!s.embeddingConfigured;
+            setBadge('chat', CONFIGURED.chat, CONFIGURED.chat ? '已就绪' : '未配置');
+            setBadge('embedding', CONFIGURED.embedding, CONFIGURED.embedding ? '已就绪' : '未配置');
+            renderStatus();
+
+            /* 记录基线：dirty 比对与「重设」均以此为参照 */
+            saved.chat = snapshot('chat');
+            saved.embedding = snapshot('embedding');
+            refreshDirty();
+        }).catch(function (e) {
+            setStatus('<span>读取设置失败：' + Console.escapeHtml(e.message) + '</span>', 'warn');
+        });
+    }
+
+    function val(id) {
+        var v = el(id).value.trim();
+        return v === '' ? null : v;
+    }
+    function num(id) {
+        var v = el(id).value.trim();
+        return v === '' ? null : Number(v);
+    }
+    /* 测试与保存都提交全量：向量地址/Key 允许回落对话模型，缺了对话部分测不了 */
+    function collectSettings() {
+        return {
+            chatBaseUrl: val('chatBaseUrl'),
+            chatApiKey: val('chatApiKey'),
+            chatModelName: val('chatModelName'),
+            chatTemperature: num('chatTemperature'),
+            chatMaxTokens: num('chatMaxTokens'),
+            embeddingBaseUrl: val('embeddingBaseUrl'),
+            embeddingApiKey: val('embeddingApiKey'),
+            embeddingModelName: val('embeddingModelName'),
+            /* 留空 = 不下发 dimensions，用服务商默认维度；填了则作为契约下发并接受实测校验 */
+            embeddingDimensions: num('embeddingDimensions')
+        };
+    }
+
+    function testConnection(which, btn) {
+        btn.disabled = true;
+        showResult(RESULT[which], '测试中…（会真实调用一次服务商接口）', '');
+        Console.jsonRequest('/admin/settings/test?type=' + encodeURIComponent(which), 'POST', collectSettings())
+            .then(function (data) {
+                if (data.success) {
+                    showResult(RESULT[which], '✅ ' + data.message, 'ok');
+                    if (which === 'embedding' && data.declaredDimension == null && data.dimension) {
+                        /* 未声明维度时只把实测值放进 placeholder 提示，不擅自改输入框
+                           —— 否则用户凭空多出「有未保存修改」，还得手动重设 */
+                        el('embeddingDimensions').placeholder =
+                            '未声明，实测模型默认 ' + data.dimension + ' 维';
+                    }
+                } else {
+                    /* 失败说明尽量完整：维度校验不通过属于"已连通但契约不成立"，
+                       与服务端无法连接是两回事，所以优先用服务端给的整句说明 */
+                    console.debug('[stringer] 测试未通过，原因：', data.error, '原始：', data.detail);
+                    showResult(RESULT[which],
+                        data.message || ('连接失败：' + (data.error || '未知原因')), 'err');
+                }
+            })
+            .catch(function (e) {
+                console.debug('[stringer] 连接测试失败：', e);
+                showResult(RESULT[which], '连接失败：无法访问管控接口', 'err');
+            })
+            .then(function () { btn.disabled = false; });
+    }
+
+    /* 清空表单 = 只清本卡片的输入框，纯前端：不发请求、不动已保存配置。
+       保存接口是"留空即回落 yaml"，所以清空后再保存 = 把本卡片回退到 yaml 配置。
+       注意 API Key 清空后语义是"不修改"，不会把服务端已有的 Key 抹掉。 */
+    function clearForm(which) {
+        restore(which, {});
+        refreshDirty(which);
+        showResult(RESULT[which],
+            '已清空「' + LABEL[which] + '」表单内容（仅本页，尚未生效）。\n'
+            + '点「保存并生效」后，留空字段会回落到服务端 yaml 配置；API Key 留空表示保持不变。', '');
+    }
+
+    /* 取"另一张卡片"已保存的值：保存接口是整对象覆盖，若把另一卡片留空，
+       它已有的配置会被一并抹掉（回落 yaml），所以必须原样带上 */
+    function pickSaved(which, id) {
+        var v = (saved[which] || {})[id];
+        if (v == null || v === '') { return null; }
+        return NUMERIC[id] ? Number(v) : v;
+    }
+
+    /* 只提交本卡片输入框的值；另一卡片用已保存值占位，保持服务端现状不变 */
+    function buildPayload(which) {
+        var all = collectSettings();
+        var other = OTHER[which];
+        FIELDS[other].forEach(function (id) { all[id] = pickSaved(other, id); });
+        return all;
+    }
+
+    /* 保存后刷新 Key 区提示（服务端只回掩码不回明文） */
+    function applyKeyHint(which, data) {
+        if (which === 'chat') {
+            var set = !!data.chatApiKeySet;
+            el('chatKeyHelp').textContent = set
+                ? '当前已配置：' + data.chatApiKeyMasked : '当前未配置';
+            el('chatApiKey').placeholder = set ? '已配置，留空不变' : '请填写 API Key';
+        } else {
+            el('embeddingKeyHelp').textContent = data.embeddingApiKeyMasked
+                ? '当前已配置：' + data.embeddingApiKeyMasked
+                : '当前未单独配置（复用对话 Key）';
+        }
+    }
+
+    /* 保存成功后的局部刷新：不重载页面，只更新本卡片的基线与全局状态。
+       刻意不调 loadSettings() —— 整体重载会把另一张卡片的未保存输入冲掉。 */
+    function afterSaved(which, data) {
+        /* 顺序要紧：先清 Key 框（已落盘，明文不留页面上），再拍基线，
+           否则 saved 里会留着明文 Key，dirty 标记会一直亮 */
+        el(which === 'chat' ? 'chatApiKey' : 'embeddingApiKey').value = '';
+        saved[which] = snapshot(which);
+        refreshDirty(which);
+        applyKeyHint(which, data);
+        CONFIGURED[which] = which === 'chat' ? !!data.chatConfigured : !!data.embeddingConfigured;
+        setBadge(which, CONFIGURED[which], CONFIGURED[which] ? '已就绪' : '未配置');
+        renderStatus();
+    }
+
+    /* 保存并生效 = 只落盘本卡片。
+       confirmedRebuild：用户已在二次确认里同意"维度变化时重建索引"，重发时带此标记。 */
+    function saveModel(which, btn, confirmedRebuild) {
+        var handedOver = false;
+        if (btn) { btn.disabled = true; }
+        showResult(RESULT[which], '保存中…', '');
+        Console.jsonRequest('/admin/settings' + (confirmedRebuild ? '?rebuildIndex=true' : ''),
+                            'POST', buildPayload(which))
+            .then(function (data) {
+                if (!data.success) {
+                    /* 维度变了：ES 索引的向量维度是 mapping 参数，建好后无法修改，
+                       必须先重建索引，否则写入会被 ES 拒绝且不会自愈。
+                       用户不确认 → 本次保存不生效，配置保持原样（避免存下一个用不了的配置）。 */
+                    if (data.requiresRebuild) {
+                        var ok = window.confirm(
+                            '⚠️ 向量维度将由 ' + data.indexDimension + ' 变为 ' + data.newDimension
+                            + '，与已建好的知识库索引不一致。\n\n'
+                            + 'ES 索引的向量维度建好后无法修改，必须先重建索引，'
+                            + '否则写入会被 ES 以维度不符拒绝。\n\n'
+                            + '是否保存并立即重建知识库索引？\n'
+                            + '（重建会删除并清空现有索引，已有文档需重新上传，耗时较长，请勿关闭页面；'
+                            + '取消则本次保存不生效，配置保持原样。）');
+                        if (ok) {
+                            /* 移交：按钮交给内层那次调用去恢复，避免外层提前解禁 */
+                            handedOver = true;
+                            saveModel(which, btn, true);
+                            return;
+                        }
+                        showResult(RESULT[which],
+                            '已取消，本次未保存（配置保持原样）。\n' + data.error, 'err');
+                        return;
+                    }
+                    /* 配置已落盘、只是索引重建失败：状态要照实刷新，不能显示成"没保存" */
+                    if (data.saved) {
+                        afterSaved(which, data);
+                        showResult(RESULT[which], '⚠️ ' + data.error, 'err');
+                        return;
+                    }
+                    showResult(RESULT[which], '❌ 保存失败：' + (data.error || '未知原因'), 'err');
+                    return;
+                }
+                afterSaved(which, data);
+                showResult(RESULT[which],
+                    '✅ 「' + LABEL[which] + '」' + (data.message || '已保存并立即生效'), 'ok');
+            })
+            .catch(function (e) {
+                showResult(RESULT[which], '❌ 请求失败：' + e.message, 'err');
+            })
+            .then(function () { if (!handedOver && btn) { btn.disabled = false; } });
+    }
+
+    /* ============ 模型名控件：下拉选择 + 手动输入 ============
+       1) 输入框可自由手动输入，输入框内容永远是最终提交的参数；
+       2) 点右侧按钮 → 每次都按「当前地址」实时拉取列表（OpenAI 规范 GET {baseUrl}/models），
+          不吃缓存；地址变了自然拿到新服务商的列表；
+       3) 选中某项 = 用该项覆盖输入框现有内容（不自动保存、不自动测试）；
+       4) 列表只是**候选池**：服务商目录 ≠ 这个 Key 已授权，能否用仍以「测试连接」为准；
+       5) 拉取失败显示「连接失败：<常见原因>」，原因由服务端从上游报文解析。 */
+    var COMBO = {
+        chat: { input: 'chatModelName', menu: 'chatModelMenu' },
+        embedding: { input: 'embeddingModelName', menu: 'embeddingModelMenu' }
+    };
+    var combos = {};
+
+    function initCombo(which) {
+        var cfg = COMBO[which];
+        var input = el(cfg.input);
+        var menu = el(cfg.menu);
+        var box = menu.parentNode;
+        var btn = box.querySelector('.combo-btn');
+        var st = { items: [], visible: [], loaded: false, forUrl: null, loading: false, active: -1 };
+        combos[which] = st;
+
+        function isOpen() { return menu.style.display === 'block'; }
+        function open() {
+            menu.style.display = 'block';
+            input.setAttribute('aria-expanded', 'true');
+        }
+        function close() {
+            menu.style.display = 'none';
+            input.setAttribute('aria-expanded', 'false');
+            st.active = -1;
+        }
+        st.close = close;
+
+        function say(text) {
+            menu.innerHTML = '<div class="combo-state">' + Console.escapeHtml(text) + '</div>';
+        }
+        function renderList() {
+            var kw = input.value.trim().toLowerCase();
+            st.visible = kw
+                ? st.items.filter(function (id) { return id.toLowerCase().indexOf(kw) >= 0; })
+                : st.items.slice();
+            if (!st.visible.length) {
+                say(st.items.length ? '无匹配项' : '没有可选模型');
+                return;
+            }
+            menu.innerHTML = st.visible.map(function (id, i) {
+                return '<div class="combo-item' + (i === st.active ? ' active' : '') + '"'
+                    + ' role="option" data-id="' + Console.escapeHtml(id) + '">'
+                    + Console.escapeHtml(id) + '</div>';
+            }).join('');
+        }
+        function pick(id) {
+            input.value = id;          /* 用所选内容覆盖输入框，最终参数以输入框为准 */
+            close();
+            refreshDirty();
+        }
+        /* 与服务端 resolveCatalogEndpoint 同规则：向量地址留空回落对话地址 */
+        function catalogUrl() {
+            if (which === 'embedding') {
+                var u = el('embeddingBaseUrl').value.trim();
+                if (u) { return u; }
+            }
+            return el('chatBaseUrl').value.trim();
+        }
+        /* 缓存必须对应当前地址：改过地址就当没拉过，避免展示别的服务商的模型 */
+        function isFresh() { return st.loaded && st.forUrl === catalogUrl(); }
+
+        function load() {
+            var url = catalogUrl();
+            if (!url) {
+                st.loaded = false; st.forUrl = null;
+                say('请先填写服务商地址');
+                open();
+                return;
+            }
+            if (st.loading) { return; }
+            st.loading = true;
+            say('加载中…');
+            open();
+            Console.jsonRequest('/admin/models?type=' + encodeURIComponent(which), 'POST', collectSettings())
+                .then(function (data) {
+                    if (!data || !data.success) {
+                        console.debug('[stringer] 拉取模型列表失败，原因：', data && data.error,
+                            '原始：', data && data.detail);
+                        st.loaded = false; st.forUrl = null;
+                        say('连接失败：' + ((data && data.error) || '未知原因'));
+                        return;
+                    }
+                    st.items = data.models || [];
+                    st.loaded = true;
+                    st.forUrl = url;
+                    renderList();
+                    open();
+                })
+                .catch(function (e) {
+                    console.debug('[stringer] 拉取模型列表失败：', e);
+                    st.loaded = false; st.forUrl = null;
+                    say('连接失败：无法访问管控接口');
+                })
+                .then(function () { st.loading = false; });
+        }
+
+        /* 点下拉 = 按当前地址重新拉一次，不用缓存 */
+        btn.addEventListener('click', function () { load(); });
+        /* 聚焦只能用「同一个地址」拉到的缓存，不额外打上游 */
+        input.addEventListener('focus', function () {
+            if (isFresh() && !isOpen()) { renderList(); open(); }
+        });
+        input.addEventListener('input', function () {
+            if (isOpen() && st.items.length) { renderList(); }
+        });
+        input.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') { close(); return; }
+            if (!isOpen() || !st.visible.length) { return; }
+            var n = st.visible.length;
+            if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+                ev.preventDefault();
+                st.active = ev.key === 'ArrowDown' ? (st.active + 1) % n : (st.active - 1 + n) % n;
+                renderList();
+                var act = menu.querySelector('.combo-item.active');
+                if (act && act.scrollIntoView) { act.scrollIntoView({ block: 'nearest' }); }
+            } else if (ev.key === 'Enter') {
+                ev.preventDefault();
+                if (st.active >= 0 && st.visible[st.active]) {
+                    pick(st.visible[st.active]);
+                } else {
+                    close();
+                }
+            }
+        });
+        menu.addEventListener('click', function (ev) {
+            var item = ev.target.closest ? ev.target.closest('.combo-item') : null;
+            if (item) { pick(item.getAttribute('data-id')); }
+        });
+    }
+
+    /* 点空白处收起所有下拉 */
+    document.addEventListener('click', function (ev) {
+        Object.keys(combos).forEach(function (w) {
+            if (!el(COMBO[w].menu).parentNode.contains(ev.target)) { combos[w].close(); }
+        });
+    });
+
+    Console.renderSidebar('models');
+
+    /* 任何输入变化都重算 dirty 标记 */
+    FIELDS.chat.concat(FIELDS.embedding).forEach(function (id) {
+        el(id).addEventListener('input', function () { refreshDirty(); });
+    });
+
+    el('reloadBtn').addEventListener('click', function () { loadSettings(); });
+    el('testChatBtn').addEventListener('click', function () { testConnection('chat', this); });
+    el('testEmbeddingBtn').addEventListener('click', function () { testConnection('embedding', this); });
+    el('clearChatBtn').addEventListener('click', function () { clearForm('chat'); });
+    el('clearEmbeddingBtn').addEventListener('click', function () { clearForm('embedding'); });
+    el('saveChatBtn').addEventListener('click', function () { saveModel('chat', this); });
+    el('saveEmbeddingBtn').addEventListener('click', function () { saveModel('embedding', this); });
+
+    initCombo('chat');
+    initCombo('embedding');
+    Console.ready(loadSettings);
+</script>
+</body>
+</html>

@@ -1,0 +1,419 @@
+# Stringer API 文档
+
+适用对象：接入方（业务应用）、工具实例提供方、运维（管控台接口）。
+设计背景与内部结构见 `DESIGN.md`。
+
+---
+
+## 1 通用约定
+
+### 1.1 基地址与端口
+
+服务端默认监听 `9527`。本文所有路径均为相对路径，示例基地址 `http://localhost:9527`。
+
+### 1.2 鉴权
+
+| 接口组 | 载具 | 说明 |
+| --- | --- | --- |
+| `/api/agent/**` | 请求头 `X-Stringer-Credential` | 凭证由 `POST /api/agent/login` 获取 |
+| `/admin/**` | Cookie `stringer_admin` | 无 Cookie 时回退读 `X-Stringer-Credential` 请求头，供程序化调用 |
+
+免鉴权路径：`/api/agent/login`、`/admin/login`、`/admin/init`、`/admin/session`、登录页与静态资源、`/error`、`/favicon.ico`。`OPTIONS` 请求一律放行。
+
+此外 `GET /health`（存活探测）不属于上面任何一组接口——它不在被拦截的两个前缀之下，拦截器不会匹配到它，因此**天然免鉴权**。
+
+凭证格式：`base64url(payload) + "." + base64url(HMAC(派生密钥, payload))`；派生密钥由主密钥与当前密码哈希导出，**改密码后全部旧凭证立即失效**。凭证无有效期。
+
+### 1.3 响应体
+
+非流式失败响应（`ServerGlobalExceptionHandler` 输出）：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `code` | int | 错误码，见第 5 节 |
+| `codeName` | String | 错误码枚举名，前端应以它分支 |
+| `error` | String | 枚举默认文案 |
+| `detail` | String | 具体原因（调试用） |
+| `retryable` | boolean | 是否可退避重试 |
+| `action` | String | 建议动作 |
+| `traceId` | String | 排障标识 |
+| `timestamp` | long | 毫秒时间戳 |
+
+成功响应的结构不统一：`/admin/**` 多数返回自定义字段并带 `code=0`；表结构、文档列表等接口返回业务字段本身。前端不应假设统一的 `{code,message,data}` 包装。
+
+### 1.4 编码与状态码
+
+- 请求与响应统一 UTF-8。
+- 时间戳字段为毫秒整数。
+- HTTP 状态码是**建议值**，业务判定一律以响应体或事件中的 `code` 为准。
+
+### 1.5 存活探测 `GET /health`（免鉴权）
+
+| 项 | 值 |
+| --- | --- |
+| 用途 | 容器编排与负载均衡的存活探针（K8s `httpGet`、Docker `HEALTHCHECK`、compose `healthcheck`） |
+| 响应 | `{"code":0, "status":"UP", "service":"stringer-server", "version":"0.1.0"}` |
+| 语义 | **只表示进程能对外服务**，不检查 ES / Redis / 模型服务 |
+
+进程存活与"依赖是否可用"是两件事：把依赖写进探针，会让刚部署、还没填配置的实例被判为不健康而反复重启；而已配置但依赖抖动时，重启进程也修不好依赖。依赖状态见启动横幅与管控台「存储配置」页。
+
+---
+
+## 2 接口 `/api/agent/**`
+
+### 2.1 `POST /api/agent/login`
+
+用账号密码换取凭证。响应体返回凭证，不写 Cookie。
+
+请求：`{"username": "...", "password": "..."}`
+
+响应：`{"code":0, "success":true, "username":"...", "credential":"...", "expiresAt":null}`
+
+### 2.2 `GET /api/agent/health`
+
+响应：`{"code":0, "status":"...", "service":"...", "version":"..."}`
+
+### 2.3 `POST /api/agent/chat`
+
+请求体 `AgentRequest`：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `sessionId` | String | 是 | 会话唯一键 |
+| `message` | String | 是 | 用户消息 |
+| `profile` | String | 是 | 域；为空或该域不存在会被拒绝 |
+| `tenantId` | String | 否 | 审计字段，写入日志；不承担隔离职责 |
+| `userId` | String | 否 | 同上 |
+| `attributes` | Map | 否 | 附加属性 |
+
+响应：`text/event-stream`，事件见第 3 节。
+
+### 2.4 `POST /api/agent/resume`
+
+恢复一次因审批而中断的执行。
+
+| 参数 | 位置 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `sessionId` | query | 是 | 会话键 |
+| `approved` | query | 是 | boolean，是否批准待执行动作 |
+| — | body | 是 | `CallerContext`，至少含 `profile`（必填）；可选 `tenantId`、`userId` |
+
+约束：`profile` 必须与中断时一致，否则拒绝。响应同为 `text/event-stream`。
+
+### 2.5 `POST /api/agent/stop/{sessionId}`
+
+| 参数 | 位置 | 必填 |
+| --- | --- | --- |
+| `sessionId` | path | 是 |
+
+响应：`{"code":0, "sessionId":"...", "stopRequested":true}`
+
+语义：仅置取消标志，由编排层在下一个检查点抛出并结束本轮，非抢占式。
+
+### 2.6 `POST /api/agent/tools/register`
+
+工具实例的注册与心跳（同一个端点，整包上报）。
+
+请求体：
+
+```json
+{
+  "instanceId": "order-svc-1",
+  "endpoint": "http://10.0.0.12:8080",
+  "manifest": [
+    {
+      "name": "queryOrder",
+      "description": "查询订单",
+      "category": "default",
+      "version": "1.0.0",
+      "profiles": ["after-sale"],
+      "sideEffect": "READ",
+      "idempotent": true,
+      "toModel": true,
+      "requiresApproval": false,
+      "approvalMode": "NONE",
+      "approvalReason": "",
+      "parameters": {}
+    }
+  ]
+}
+```
+
+| 响应 | HTTP | 体 |
+| --- | --- | --- |
+| 受理 | 200 | `{"accepted":true, "toolNames":["..."]}` |
+| 被强制下线 | 410 | `{"accepted":false, "reason":"force_offline"}` |
+| 报文不合法 | 400 | 标准错误响应体 |
+
+语义：本次上报即该实例的完整声明；未出现在本次 `manifest` 中的工具视为该实例已撤下。
+
+---
+
+## 3 流式事件契约
+
+`chat` 与 `resume` 返回 `text/event-stream`，每帧数据为一个 `AgentEvent`：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `type` | String | 事件类型，见下表 |
+| `sessionId` | String | 会话键 |
+| `content` | String | 主要载荷（文本或工具名），部分事件为 null |
+| `payload` | String | 附加载荷（JSON 字符串），部分事件为 null |
+| `code` | Integer | 错误码，仅 `ERROR` 非空 |
+| `codeName` | String | 错误码枚举名，仅 `ERROR` 非空 |
+| `traceId` | String | 仅 `ERROR` 非空 |
+| `timestamp` | long | 毫秒时间戳 |
+
+| `type` | `content` | `payload` | 说明 |
+| --- | --- | --- | --- |
+| `TOKEN` | 增量文本 | null | 流式输出片段 |
+| `TOOL_CALL` | 工具名 | 参数 JSON | 模型决定调用某个工具 |
+| `TOOL_RESULT` | 工具名 | 结果文本 | 工具返回 |
+| `INTERRUPT` | null | 待授权工具列表 JSON | 命中审批，本轮挂起，需调 `resume` |
+| `STOPPED` | null | null | 本轮被用户停止 |
+| `ERROR` | 可读文案 | null | `code`/`codeName`/`traceId` 必填 |
+| `DONE` | null | null | 本轮结束 |
+
+约定：只有 `ERROR` 事件携带 `code`；过程事件不带。调用方必须显式处理 `ERROR` 事件——错误是通过事件表达的，不会抛出异常，HTTP 状态已是 200。
+
+---
+
+## 4 接口 `/admin/**`（管控台与运维）
+
+### 4.1 账号
+
+| 方法 | 路径 | 入参 | 响应要点 |
+| --- | --- | --- | --- |
+| POST | `/admin/init` | body `Credentials{username, password}` | `code`、`success`、`message`；仅无账号时可用 |
+| POST | `/admin/login` | body `Credentials` | `code`、`success`、`username`、`credential`、`defaultCredential`；同时写 Cookie |
+| POST | `/admin/logout` | — | `code`、`success` |
+| GET | `/admin/session` | — | `code`、`initialized`、`corrupted`、`authenticated`、`accountFile`（未初始化或已认证时返回）、认证后追加 `username`、`lastLoginAt`、`lastLoginFrom`、`defaultCredential` |
+| POST | `/admin/password` | body `PasswordChange{oldPassword, newPassword}` | `code`、`success`、`message`；成功后全部旧凭证失效 |
+
+### 4.2 模型设置
+
+| 方法 | 路径 | 入参 | 响应要点 |
+| --- | --- | --- | --- |
+| GET | `/admin/settings` | — | `chatBaseUrl`、`chatApiKeyMasked`、`chatApiKeySet`、`chatModelName`、`chatTemperature`、`chatMaxTokens`、`embeddingBaseUrl`、`embeddingApiKeyMasked`、`embeddingModelName`、`embeddingDimensions`、`chatConfigured`、`embeddingConfigured`、`settingsFile` |
+| POST | `/admin/settings` | body `LlmSettings`；query `rebuildIndex`（默认 false） | `success`、`chatConfigured`、`embeddingConfigured`、`rebuilt`、`message`；维度变化未确认重建时返回 `success`、`requiresRebuild` |
+| POST | `/admin/settings/test` | body `LlmSettings`（可空）；query `type`（`chat`/`embedding`，默认 `chat`） | 成功：`success`、`type`、`reply`、`message`、`dimension`、`declaredDimension`、`indexDimension`；失败：`success`、`type`、`message`、`error`、`detail` |
+| POST | `/admin/models` | body `LlmSettings`（可空）；query `type` | 成功：`success`、`models`；失败同上 |
+
+约定：`apiKey` 不回显，留空表示保持原值；向量模型的地址与 Key 留空时回落文本模型配置。
+
+### 4.3 工具、域与提示词
+
+| 方法 | 路径 | 入参 | 响应要点 |
+| --- | --- | --- | --- |
+| GET | `/admin/tools` | — | 工具描述符列表 `ToolDescriptor` |
+| GET | `/admin/domains` | — | `stats{domainCount, toolCount, globalToolCount, approvalToolCount, missingPromptCount}`、`domains`、`globalTools`、`orphanPrompts`、`settingsFile` |
+| GET | `/admin/profiles` | — | `base`、`profiles`、`domains`、`previewBoundary`、`orphanPrompts`、`settingsFile` |
+| POST | `/admin/profiles` | body `ProfileSettings`（可空） | `success`、`message`、`settingsFile` |
+
+`domains` 与 `profiles` 是同一事实的两个视图：域由工具声明派生，接口不提供创建/删除域的操作。域一经被某个工具声明过就不再消失（工具被断开时域仍在，只是该域下暂时没有工具）；`10004` 只在"从未被声明过的域"上出现。
+
+### 4.4 在线实例
+
+| 方法 | 路径 | 入参 | 响应要点 |
+| --- | --- | --- | --- |
+| GET | `/admin/instances` | — | `stats{instanceCount, onlineCount, mutedCount, drainingCount, forceOfflineCount, registeredToolCount, remoteReplicaCount, timeoutSeconds}`、`instances[]` |
+| POST | `/admin/instances/{instanceId}/mute` | path `instanceId` | `success`、`instanceId`、`removedToolCount`、`message` |
+| POST | `/admin/instances/{instanceId}/restore` | path `instanceId` | `success`、`instanceId`、`message` |
+| POST | `/admin/instances/{instanceId}/offline` | path `instanceId` | `success`、`instanceId`、`removedToolCount`、`message` |
+
+`instances[]` 单项字段：`instanceId`、`endpoint`、`state`（`ONLINE`/`MUTED`/`DRAINING`/`FORCE_OFFLINE`）、`stateLabel`、`rejecting`、`muted`、`lastSeen`、`silentMillis`、`toolNames`、`toolCount`、`digest`（前 12 位）。
+
+熔断（`mute`）：标记 `MUTED` 并立即摘除其工具副本，**心跳继续受理**，随时可用 `restore` 解除——副本在它的下一次心跳时重建，实例自身重启同理会自动重连回来。
+
+强制下线（`offline`）：标记 `FORCE_OFFLINE` 并立即摘除其工具副本，该实例下次心跳收到 410；不截断会话；标记在保留窗（默认 1h）内有效。
+
+两者都不截断会话、不杀进程、不掐连接，差别只在是否连心跳一起拒绝；已空心跳的熔断实例会在超时窗后从在线表移除。
+
+### 4.5 知识库
+
+| 方法 | 路径 | 入参 | 响应要点 |
+| --- | --- | --- | --- |
+| GET | `/admin/kb/documents` | — | `code`、`count`、`documents[{docId, fileName, chunks}]` |
+| POST | `/admin/kb/documents` | `multipart/form-data`，`file`（必填）、`replace`（默认 false） | `code`、`success`、`docId`、`fileName`、`size`、`chunks` |
+| DELETE | `/admin/kb/documents/{docId}` | path `docId` | `code`、`success`、`docId`、`deleted` |
+| GET | `/admin/kb/status` | — | `code` 与索引状态字段（`index`、`indexExists`、`documents`、`chunks`、`hint`） |
+| POST | `/admin/kb/rebuild` | — | `code`、`success`、`index`、`dimensions`、`message` |
+
+约定：上传为同步（切片与向量化完成后才返回）；同名不区分大小写，默认拒绝，`replace=true` 先删后写；`rebuild` 会清空索引，之后需重新上传文档。
+
+### 4.6 存储配置
+
+| 方法 | 路径 | 入参 | 响应要点 |
+| --- | --- | --- | --- |
+| GET | `/admin/infra` | — | `es{}`、`redis{}`、`esConfigured`、`redisConfigured`、`esSource`、`redisSource`、`indexName`、`settingsFile` |
+| POST | `/admin/infra` | body `InfraSettings` | `success`、`esConfigured`、`redisConfigured`、`esSource`、`redisSource`、`message`；ES 保存后追加 `requiresRebuild`、`indexDocCount`、`indexProbeError` |
+| POST | `/admin/infra/test` | body `InfraSettings`（可空）；query `type`（`es`/`redis`，默认 `es`） | `success`、`type` 及各类型的探测结果字段 |
+
+保存语义：整对象覆盖（单卡保存时另一卡需回填已存值）；口令不回显，留空表示保持原值；保存后连接热替换，无需重启。
+
+### 4.7 运行指标
+
+| 方法 | 路径 | 响应要点 |
+| --- | --- | --- |
+| GET | `/admin/metrics` | `code`、`uptimeSeconds`、`counters{chatRequests, resumeRequests, stopRequests, toolCalls, toolFailures}`、`runningSessions`、`registeredTools`、`heapUsedBytes`、`heapMaxBytes` |
+
+指标为**进程内累计**：重启归零、不跨实例聚合（服务端只支持单实例）。要长期趋势与告警，把日志或本接口接进外部监控。实例维度的数量（在线 / 判死 / 强制下线 / 副本数）在 `GET /admin/instances` 的 `stats` 里。
+
+---
+
+## 5 错误码总表
+
+| 码 | 枚举名 | 默认文案 | 可重试 | 建议 HTTP |
+| --- | --- | --- | --- | --- |
+| 0 | `OK` | ok | — | 200 |
+| 10000 | `PERMISSION_DENIED` | 当前权限无法使用该能力 | 否 | 403 |
+| 10001 | `TOOL_PERMISSION_DENIED` | 该工具不在当前域内 | 否 | 403 |
+| 10002 | `AUTH_REQUIRED` | 未登录或凭证已失效 | 否 | 401 |
+| 10003 | `AUTH_FAILED` | 账号或密码错误 | 否 | 401 |
+| 10004 | `PROFILE_NOT_FOUND` | 指定的域不存在 | 否 | 400 |
+| 10005 | `AUTH_NOT_INITIALIZED` | 服务端账号尚未初始化 | 否 | 409 |
+| 10006 | `AUTH_ALREADY_INITIALIZED` | 账号已存在，初始化入口已关闭 | 否 | 409 |
+| 10007 | `AUTH_STORE_CORRUPTED` | 账号文件损坏，无法读取 | 否 | 503 |
+| 10008 | `CALLER_CONTEXT_REQUIRED` | 缺少调用方身份 | 否 | 400 |
+| 10009 | `PROFILE_REQUIRED` | 未指定本轮所处的域 | 否 | 400 |
+| 20000 | `RATE_LIMITED` | 请求过于频繁，请稍后再试 | 是 | 429 |
+| 20001 | `LLM_RATE_LIMITED` | AI 服务繁忙，请稍后重试 | 是 | 429 |
+| 20002 | `SYSTEM_BUSY` | 系统繁忙，请稍后重试 | 是 | 503 |
+| 20003 | `CONCURRENT_LIMIT` | 并发会话数已达上限 | 是 | 503 |
+| 30000 | `ORCHESTRATION_FAILED` | 任务执行失败，请重试 | 是 | 500 |
+| 30001 | `SESSION_NOT_FOUND` | 会话不存在或已过期 | 否 | 404 |
+| 30002 | `SESSION_STATE_INVALID` | 会话状态异常，无法继续 | 否 | 409 |
+| 30003 | `SESSION_BUSY` | 会话正在执行中，拒绝并发请求 | 否 | 409 |
+| 40000 | `INVALID_PARAMETER` | 请求参数非法 | 否 | 400 |
+| 40001 | `MISSING_REQUIRED_PARAMETER` | 缺少必填参数 | 否 | 400 |
+| 40002 | `TYPE_MISMATCH` | 参数类型不匹配 | 否 | 400 |
+| 40003 | `INPUT_REJECTED` | 输入内容不安全，已被拦截 | 否 | 400 |
+| 40004 | `CLIENT_CANCELLED` | 用户已中断请求 | 否 | 499 |
+| 40400 | `RESOURCE_NOT_FOUND` | 请求的资源不存在 | 否 | 404 |
+| 50000 | `SYSTEM_ERROR` | 系统内部错误 | 是 | 500 |
+| 50001 | `UNEXPECTED_ERROR` | 服务暂时不可用，请稍后重试 | 是 | 500 |
+| 60000 | `KNOWLEDGE_BASE_ERROR` | 知识库服务异常 | 是 | 500 |
+| 60001 | `KNOWLEDGE_SEARCH_ERROR` | 知识库检索失败 | 是 | 500 |
+| 60002 | `KNOWLEDGE_INGEST_ERROR` | 知识库文档导入失败 | 否 | 500 |
+| 60003 | `KNOWLEDGE_DEDUP_ERROR` | 知识库去重计算失败 | 否 | 500 |
+| 60004 | `KNOWLEDGE_STRATEGY_NOT_FOUND` | 未匹配到文档处理策略 | 否 | 500 |
+| 60005 | `KNOWLEDGE_DOCUMENT_DUPLICATE` | 知识库已存在同名文档 | 否 | 409 |
+| 60006 | `KNOWLEDGE_UPLOAD_REJECTED` | 知识库文档上传被拒绝 | 否 | 400 |
+| 70000 | `CHAT_MEMORY_ERROR` | 会话记忆服务异常 | 是 | 500 |
+| 70001 | `CHAT_MEMORY_READ_ERROR` | 读取会话记忆失败 | 是 | 500 |
+| 70002 | `CHAT_MEMORY_WRITE_ERROR` | 写入会话记忆失败 | 是 | 500 |
+| 70003 | `CHAT_MEMORY_DELETE_ERROR` | 删除会话记忆失败 | 否 | 500 |
+| 70004 | `CHECKPOINT_ERROR` | 图检查点读写失败 | 是 | 500 |
+| 80000 | `TOOL_ERROR` | 工具调用异常 | 是 | 500 |
+| 80001 | `TOOL_NOT_FOUND` | 未找到指定工具 | 否 | 404 |
+| 80002 | `TOOL_DUPLICATE` | 工具名称重复注册 | 否 | 500 |
+| 80003 | `TOOL_EXECUTION_FAILED` | 工具执行失败 | 是 | 500 |
+| 90000 | `LLM_TIMEOUT` | 大模型接口响应超时 | 是 | 504 |
+| 90001 | `EXTERNAL_SERVICE_TIMEOUT` | 外部服务调用超时 | 是 | 504 |
+| 90002 | `SERVER_UNREACHABLE` | 无法连接 Stringer 服务端 | 是 | 503 |
+| 90003 | `LLM_UNAVAILABLE` | AI 服务暂时不可用 | 是 | 503 |
+| 90004 | `STORAGE_UNAVAILABLE` | 存储服务不可用 | 是 | 503 |
+| 90005 | `DEPENDENCY_NOT_CONFIGURED` | 服务依赖尚未配置 | 否 | 503 |
+
+区分要点：`90004`＝已配置但连不上（ERROR，可重试）；`90005`＝尚未配置（WARN，不可重试，提示去管控台补填）。`10008`/`10009`/`10004` 分别表示缺整份身份、缺域字段、域不存在，处置不同，不可合并。
+
+---
+
+## 6 接入方（starter）
+
+### 6.1 配置
+
+前缀 `stringer.server`（地址与账号，与工具实例共用同一份）：
+
+| 键 | 默认值 |
+| --- | --- |
+| `host` | `localhost` |
+| `port` | `9527` |
+| `username` | `stringer` |
+| `password` | `stringer` |
+
+前缀 `stringer.client`（调用行为）：
+
+| 键 | 默认值 |
+| --- | --- |
+| `health-check-timeout` | 5s |
+| `connect-timeout` | 5s |
+| `read-timeout` | 10m |
+
+### 6.2 自动配置与 Bean
+
+自动配置类 `StringerAutoConfiguration`，注册以下 Bean：
+
+| Bean | 类型 | 说明 |
+| --- | --- | --- |
+| `stringerWebClient` | `WebClient` | 内部与自定义调用使用 |
+| `stringerClientCredential` | `ClientCredential` | 凭证缓存与登录 |
+| `agentService` | `AgentService` | 对话契约（chat / resume / stop） |
+| `stringerKnowledgeBaseClient` | `KnowledgeBaseClient` | 知识库管理 |
+| `stringerConnectivityCheck` | `SmartInitializingSingleton` | 启动期探测，失败即中断启动 |
+
+### 6.3 方法签名
+
+| 类 | 方法 |
+| --- | --- |
+| `ClientCredential` | `get()`、`invalidate()`、`login()`、`extractHttpStatus(Throwable)` |
+| `KnowledgeBaseClient` | `upload(byte[] content, String fileName, boolean replace)` → `UploadResult(docId, fileName, size, chunks)` |
+| | `list()` → `List<DocumentItem(docId, fileName, chunks)>` |
+| | `delete(String docId)` |
+
+客户端异常统一为 `StringerException`（携带 `ErrorCode`）；启动探测失败抛 `StringerStartupException`。
+
+---
+
+## 7 工具实例（SDK）
+
+### 7.1 注解
+
+`@StringerTool`（METHOD）字段见 `DESIGN.md` §5.1。使用前提：所在类实现 `StringerToolProvider` 并注册为 Spring Bean。
+
+### 7.2 配置
+
+服务端地址与账号读 `stringer.server.*`（`host` / `port` / `username` / `password`，默认 `localhost` / `9527` / `stringer` / `stringer`），与客户端 starter 共用同一份。
+
+前缀 `stringer.tool-instance`：
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | false | 必须显式开启 |
+| `instance-id` | — | 实例标识 |
+| `endpoint` | 推导 | 本实例对外可达地址，服务端反向调用用；留空按 `http://localhost:{本进程端口}/stringer/invoke` 推导，跨机部署必须显式填写 |
+| `heartbeat-interval-seconds` | 10 | 心跳周期 |
+| `max-backoff-seconds` | 60 | 连续失败退避上限 |
+| `request-timeout-millis` | 10000 | 出站请求超时 |
+
+### 7.3 核心类型
+
+| 类型 | 说明 |
+| --- | --- |
+| `ToolInstanceClient` | `register(ToolSpec, ToolHandler)`、`start()`、`stop()`、`invoke(JsonNode)` |
+| `ToolHandler` | `handle(String argumentsJson)` |
+| `ToolSpec` | 工具声明（序列化为注册报文的 `manifest` 项） |
+| `ToolInstanceConfig` | 实例身份配置 |
+| `ToolRegistrar` | 注册扩展点 |
+
+### 7.4 反向调用协议（服务端 → 实例）
+
+实例侧端点：`POST /stringer/invoke`
+
+请求体：
+
+| 字段 | 说明 |
+| --- | --- |
+| `requestId` | 请求标识 |
+| `toolName` | 工具名 |
+| `arguments` | 参数（JSON） |
+| `tenantId` / `userId` / `traceId` | 调用上下文 |
+
+响应体：
+
+| 情况 | 响应 |
+| --- | --- |
+| 成功 | `{"requestId":"...", "success":true, "result":...}` |
+| 业务失败 | `{"requestId":"...", "success":false, "error":"...", "retryable":true/false}` |
+
+约定：实例必须**同步**返回；服务端仅在传输层失败（超时、连接失败）时换副本重试，业务失败直接返回给模型。

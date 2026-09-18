@@ -5,16 +5,22 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.zxc</groupId>
+        <groupId>com.zzkingcc</groupId>
         <artifactId>Stringer</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>0.1.0</version>
     </parent>
 
     <artifactId>stringer-common</artifactId>
     <name>stringer-common</name>
-    <description>Stringer 公共支撑：异常体系 + 通用工具（无内部依赖）</description>
+    <description>Stringer 公共支撑：异常体系 + 通用工具（仅依赖 api 契约层）</description>
 
     <dependencies>
+        <!-- 错误码契约：异常体系需要引用 ErrorCode，故依赖最底层的 api -->
+        <dependency>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-api</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>

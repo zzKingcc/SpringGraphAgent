@@ -5,23 +5,59 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.zxc</groupId>
+        <groupId>com.zzkingcc</groupId>
         <artifactId>Stringer</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>0.1.0</version>
     </parent>
 
     <artifactId>stringer-spring-boot-starter</artifactId>
     <name>stringer-spring-boot-starter</name>
-    <description>Stringer Spring Boot Starter（客户依赖入口）— 骨架占位，Phase 2 后段填充自动装配</description>
+    <description>Stringer 消费侧 Starter：一个坐标同时给出远程调用、工具实例 SDK 与公共异常 / 输入安全；
+        编排 / 知识库 / 存储逻辑仍在服务端</description>
 
     <dependencies>
+        <!-- ===== 内部契约层 ===== -->
         <dependency>
-            <groupId>com.zxc</groupId>
-            <artifactId>stringer-core</artifactId>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-api</artifactId>
         </dependency>
+        <!-- 公共异常体系与输入安全：接入方做统一错误码响应、入参校验时直接可用 -->
+        <dependency>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-common</artifactId>
+        </dependency>
+        <!-- 工具实例 SDK：让宿主进程把自身方法注册给服务端并接收回调。
+             其自动装配整体受 stringer.tool-instance.enabled=true 约束，
+             未开启时不注册回调端点、不启动心跳，只调 AI 的宿主不受影响 -->
+        <dependency>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-tool-instance</artifactId>
+        </dependency>
+
+        <!-- ===== Spring Boot 装配 ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <!-- 响应式 WebClient：客户端用 SSE 流式调用服务端 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <!-- Jackson：客户端要解析服务端的错误报文（把 {code,...} 还原成带码异常，
+             见 StringerErrors），属直接使用，显式声明而不依赖传递依赖 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
         </dependency>
     </dependencies>
 </project>

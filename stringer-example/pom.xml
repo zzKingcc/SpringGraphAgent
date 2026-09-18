@@ -5,19 +5,52 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.zxc</groupId>
-        <artifactId>Stringer</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.4</version>
+        <relativePath/>
     </parent>
 
+    <groupId>com.zzkingcc</groupId>
     <artifactId>stringer-example</artifactId>
+    <version>0.1.0</version>
     <name>stringer-example</name>
-    <description>Stringer 示例项目 — 骨架占位，Phase 2 后段填充 @StringerStep 示例</description>
+    <description>Stringer 接入示例 / 联调入口：单层 Controller + 测试页面，固定 Spring Boot 3.3.4</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <stringer.version>0.1.0</stringer.version>
+    </properties>
+
 
     <dependencies>
         <dependency>
-            <groupId>com.zxc</groupId>
+            <groupId>com.zzkingcc</groupId>
             <artifactId>stringer-spring-boot-starter</artifactId>
+            <version>${stringer.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.zzkingcc.stringer.example.StringerExampleApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
