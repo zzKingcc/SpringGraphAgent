@@ -1,4 +1,5 @@
-<h1 align="center">Stringer</h1>
+
+<h3 align="center">Stringer</h3>
 
 <p align="center">
   <strong>Java 生态的 AI Agent 运行时中间件。<br>引一个 starter：注入 AgentService 就能调 AI，方法上加 @StringerTool 就能让 AI 调你。编排、工具治理、知识库、管控台都在服务端。</strong>
@@ -9,15 +10,28 @@
   <img src="https://img.shields.io/badge/license-Apache--2.0-yellow?style=flat-square" alt="license">
   <img src="https://img.shields.io/badge/Java-21-orange?style=flat-square&logo=openjdk&logoColor=white" alt="java">
   <img src="https://img.shields.io/badge/Spring%20Boot-3.5.7-6DB33F?style=flat-square&logo=springboot&logoColor=white" alt="spring-boot">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/LangChain4j-1.18.1-7B68EE?style=flat-square" alt="langchain4j">
   <img src="https://img.shields.io/badge/LangGraph4j-1.8.17-008080?style=flat-square" alt="langgraph4j">
   <img src="https://img.shields.io/badge/Elasticsearch-9.x-005571?style=flat-square&logo=elasticsearch&logoColor=white" alt="elasticsearch">
   <img src="https://img.shields.io/badge/Redis-6%2B-DC382D?style=flat-square&logo=redis&logoColor=white" alt="redis">
 </p>
 
+<p align="center">
+  <a href="#为什么选择-stringer">能力一览</a>
+  &nbsp;·&nbsp;
+  <a href="#与主流方案相比">方案对比</a>
+  &nbsp;·&nbsp;
+  <a href="#快速开始">快速开始</a>
+  &nbsp;·&nbsp;
+  <a href="#文档">文档</a>
+</p>
+
 ---
 
-## ✨ 为什么选择 stringer？
+## 为什么选择 stringer？
 
 | 能力 | 具体到能做什么 |
 | --- | --- |
@@ -158,7 +172,7 @@ public class MyService {
 
 打开 `stringer.tool-instance.enabled=true`，然后在任意 Spring Bean 的方法上声明：
 
-```java 示例
+```java
 // 只读工具：客服域可见，参数 schema 由方法签名推导
 @StringerTool(name = "queryOrder", description = "按订单号查询订单状态。用户追问发货/物流时调用",
         profiles = {"customer"})
