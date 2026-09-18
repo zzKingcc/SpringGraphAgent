@@ -13,7 +13,7 @@ Stringer 采用「中间件形态」：把重逻辑全部收在服务端，对�
 |---|---|---|---|
 | 服务端 jar | `stringer-server` | 承载编排 / 工具注册表 / 知识库 / ES·Redis·LLM 连接，暴露 HTTP+SSE | 自部署，通过管控台配置 |
 | 客户端 starter | `stringer-spring-boot-starter` | 极薄，只把调用转发到服务端 | 注入 `AgentService` 调 AI |
-| 工具实例 SDK | `stringer-tool-instance` | 把你进程里的工具注册给服务端，接收回调执行 | 实现 `ToolInstanceContributor` 声明工具 |
+| 工具实例 SDK | `stringer-tool-instance` | 把你进程里的工具注册给服务端，接收回调执行 | 方法上写 `@StringerTool`（或实现 `ToolInstanceContributor`）声明工具 |
 
 starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter 就同时具备「调 AI」与「提供工具」两种能力**（工具能力默认关闭，见 §1.1）。`stringer-tool-instance` 保留独立坐标，供只想当工具方的进程单独使用。
 
@@ -26,7 +26,7 @@ starter 已把工具实例 SDK 与公共支撑一并传递：**引一个 starter
 | 得到的能力 | 怎么用 |
 |---|---|
 | 调 AI：发起对话、订阅事件流 | 注入 `AgentService`，配 `stringer.server.*`（见 §3） |
-| 当工具方：把本进程的方法交给 Agent 调用 | 实现 `ToolInstanceContributor`，打开 `stringer.tool-instance.enabled`（见 §4） |
+| 当工具方：把本进程的方法交给 Agent 调用 | 方法上写 `@StringerTool`，打开 `stringer.tool-instance.enabled`（见 §4） |
 | 公共异常与输入安全 | 复用 `ErrorCode` / `BaseException` / `InputSanitizer` 等 |
 
 - **工具能力默认关闭**：`stringer.tool-instance.enabled` 默认 `false`。未打开时不注册回调端点、不启动心跳、不建任何工具实例 Bean，只想调 AI 的应用不受影响。
@@ -344,7 +344,42 @@ stringer:
 - 跨机、容器、前面有网关：**必须显式配置**，否则地址在服务端侧指向服务端自己，注册会成功、心跳也正常，但工具一被调用就失败。
 - 兜底：服务端在收到注册时会比较 `endpoint` 的主机与注册来源 IP，发现"上报 loopback 但来源不是本机"时会打出明确 WARN，把这类静默故障提前暴露出来。
 
-### 4.3 声明工具
+### 4.3 声明工具：注解式（推荐）
+
+在任意 Spring Bean 的方法上写 `@StringerTool`，SDK 在装配期扫描并注册。方法签名即参数 schema，注解即治理策略，方法体即执行逻辑——三者不再分离：
+
+```java
+@Component
+public class OrderTools {
+
+    // ① 只读：客服域可见，参数 schema 由签名推导
+    @StringerTool(name = "queryOrder", description = "按订单号查询订单状态。用户追问自己订单的发货/物流情况时调用",
+            profiles = {"customer"}, category = "订单")
+    public String queryOrder(@ToolParam(description = "订单号，如 FR2024001", example = "FR2024001") String orderNo) {
+        return orderService.statusOf(orderNo);
+    }
+
+    // ② 写操作：声明副作用 + 每次调用前中断等人工确认
+    @StringerTool(name = "refundOrder", description = "按订单号退款。仅在用户明确要求退款时调用",
+            profiles = {"admin"}, category = "订单",
+            sideEffect = StringerTool.SideEffect.WRITE)
+    @ToolPolicy(approval = @ToolPolicy.Approval(mode = ToolPolicy.Approval.Mode.ALWAYS, reason = "退款需人工确认"))
+    public String refundOrder(@ToolParam(description = "订单号") String orderNo,
+                              @ToolParam(description = "退款金额，单位：元，必须 ≤ 订单实付金额") BigDecimal amount) {
+        return orderService.refund(orderNo, amount);
+    }
+}
+```
+
+要点：
+
+- **参数绑定**：调用时按参数名从模型的参数 JSON 里取值并转成声明类型；取不到就抛 `缺少必填参数: xxx`（由 SDK 包装成工具失败原因回喂模型）。
+- **参数名来源**：优先 `@ToolParam.name`，其次编译期元数据。Spring Boot 父 pom 默认开了 `-parameters`；普通 Maven 工程没开时**启动期直接报错**并提示补 `@ToolParam(name=...)`——用 `arg0` 注册出去只会让模型拿错 key，这种错必须留在启动期。
+- **返回值**：`String` 原样回喂模型，其余类型序列化成 JSON。
+- **开关**：`stringer.tool-instance.scan-annotated`（默认 `true`）。关掉则只认 §4.4 的编程式注册。
+- 注解字段语义与 `ToolSpec` 完全一致，见 §4.5；`@ToolParam` / `@ToolPolicy` 字段见 §5 的注解表。
+
+### 4.4 声明工具：编程式（工具清单要在启动期动态拼装时用）
 
 实现 `ToolInstanceContributor`（Spring Bean 即可），在 `contribute` 里登记：
 
@@ -384,7 +419,9 @@ public class OrderTools implements ToolInstanceContributor {
 }
 ```
 
-### 4.4 ToolSpec 字段
+> 两种方式可以共存。**重名时编程式覆盖注解式**（后注册生效），需要临时改写某个工具声明时不必动业务方法。
+
+### 4.5 ToolSpec 字段
 
 `ToolSpec` 不可变，链式 `with*` 返回新实例。
 
@@ -402,7 +439,7 @@ public class OrderTools implements ToolInstanceContributor {
 
 参数 schema 用 `ToolSpec.schema(properties, required...)` 便捷构造（本质就是 JSON Schema 的 `type/properties/required`），也可传 record DTO 的 JSON 结构。
 
-### 4.5 ToolHandler 实现
+### 4.6 ToolHandler 实现
 
 ```java
 @FunctionalInterface
@@ -416,7 +453,7 @@ public interface ToolHandler {
 - **不抛异常也能表达失败**：返回「订单不存在」这类说明文字对模型更友好；抛异常 = 执行失败（异常信息回喂模型，不回抛给用户）。
 - 有副作用的工具（关单、退款）**自己防重**：模型可能因上下文重复调用同一工具。
 
-### 4.6 回调端点 `/stringer/invoke`
+### 4.7 回调端点 `/stringer/invoke`
 
 服务端要执行工具时，POST 到 `endpoint`（即你进程的 `/stringer/invoke`）。路径固定，不要改——改了会「注册成功但一调用就 404」。HTTP 层永远返回 200，业务失败写在响应的 `success=false` 里，以区分「实例不可达（该换副本重试）」和「工具执行失败（直接回喂模型）」。
 
@@ -426,11 +463,14 @@ public interface ToolHandler {
 
 ## 5. 另一种形态：工具随服务端部署（本地 Bean 工具）
 
+> **两侧写法完全一致**：工具在业务进程（工具实例）时用 §4.3，工具随服务端部署时用本节。
+> 同一段代码在两种形态之间搬迁，一个字都不用改 —— 区别只在工具实例需要 `/stringer/invoke` 回调端点，本地 Bean 工具不需要。
+
 若工具直接放在服务端进程内（而非独立实例），用注解声明，由服务端启动期扫描，不暴露 `/stringer/invoke`：
 
 ```java
 @Component
-public class LocalTools implements StringerToolProvider {   // 实现该接口 + 注册为 Spring Bean
+public class LocalTools {                                  // 任意 Spring Bean 即可
 
     @StringerTool(
         name = "queryOrder",
@@ -442,6 +482,9 @@ public class LocalTools implements StringerToolProvider {   // 实现该接口 +
     }
 }
 ```
+
+> `StringerToolProvider` 已退化为**可选标记**：实现了照样被扫到，不实现也不影响注册——与工具实例 SDK 的规则一致。
+> 唯一例外是工具方法所在的类被 AOP 代理且注解没留在代理方法上时，实现该接口可确保被扫到（SDK 侧遇到这种情况会打 WARN 提示）。
 
 注解字段与 `ToolSpec` 语义一致，便于「工具从哪来」对模型与管控台透明：
 
@@ -475,8 +518,9 @@ public class LocalTools implements StringerToolProvider {   // 实现该接口 +
 ## 7. 端到端最小跑通（参考 `stringer-example`）
 
 1. 起服务端：`java -jar stringer-0.1.0.jar`（默认 9527）。
-2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 4 个工具（天气/订单/经营报表/关单）周期注册给服务端。
+2. 起示例应用（`stringer-example`，默认 8080）：它同时扮演客户端 + 工具实例，自带 6 个工具（天气/订单/物流/经营报表/关单/改收货电话，全部用 `@StringerTool` 声明）周期注册给服务端。
 3. 打开 `http://localhost:8080/test.html`：两个面板（客服 `customer`、管理员 `admin`）演示域差异；关单工具触发 `INTERRUPT` → 走 `resume` 审批。
 4. 管控台 `http://localhost:9527/admin.html` 的「在线实例」页可确认示例实例已注册、工具已进注册表。
+5. 想顺手验证知识库：`stringer-example/src/main/resources/ragDatabase/` 下有 4 篇「鲜果时光」语料（公司简介与配送范围 / 退款与售后政策 / 会员与订阅规则 / 常见问题 FAQ），在管控台「知识库」页上传即可检索。**它们不参与示例启动**，只是联调用的现成语料。
 
 > 示例应用**不需要任何环境变量**：服务端侧的模型/ES/Redis 都在管控台配；这里只有服务端地址与账号可覆盖（`STRINGER_SERVER_HOST` / `STRINGER_SERVER_PORT` / `STRINGER_SERVER_USERNAME` / `STRINGER_SERVER_PASSWORD`）。工具回流地址也不用配——示例与服务端同机，由 SDK 自动推导。

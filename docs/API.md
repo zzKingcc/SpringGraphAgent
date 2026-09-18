@@ -369,7 +369,12 @@
 
 ### 7.1 注解
 
-`@StringerTool`（METHOD）字段见 `DESIGN.md` §5.1。使用前提：所在类实现 `StringerToolProvider` 并注册为 Spring Bean。
+`@StringerTool`（METHOD）字段见 `DESIGN.md` §5.1。两种生效场景：
+
+- **工具实例侧（本 SDK）**：方法所在类注册为 Spring Bean 即可，由 `AnnotatedToolScanner` 在装配期扫描注册；参数 schema 由方法签名推导，`@ToolParam` 补语义，`@ToolPolicy` 定审批。
+- **服务端进程内**：任意 Spring Bean 即可（见 `INSTANCE.md` §5）。`StringerToolProvider` 为可选标记，实现了照样被扫到。
+
+开关 `stringer.tool-instance.scan-annotated`（默认 `true`）。
 
 ### 7.2 配置
 
@@ -380,6 +385,7 @@
 | 键 | 默认值 | 说明 |
 | --- | --- | --- |
 | `enabled` | false | 必须显式开启 |
+| `scan-annotated` | true | 是否扫描 `@StringerTool` 注解方法并自动注册；关闭后只认 `ToolInstanceContributor` 编程式注册 |
 | `instance-id` | — | 实例标识 |
 | `endpoint` | 推导 | 本实例对外可达地址，服务端反向调用用；留空按 `http://localhost:{本进程端口}/stringer/invoke` 推导，跨机部署必须显式填写 |
 | `heartbeat-interval-seconds` | 10 | 心跳周期 |
@@ -395,6 +401,7 @@
 | `ToolSpec` | 工具声明（序列化为注册报文的 `manifest` 项） |
 | `ToolInstanceConfig` | 实例身份配置 |
 | `ToolRegistrar` | 注册扩展点 |
+| `AnnotatedToolScanner` | 扫描 Spring 容器里带 `@StringerTool` 的方法，转成 `ToolSpec` + 反射执行体并注册 |
 
 ### 7.4 反向调用协议（服务端 → 实例）
 

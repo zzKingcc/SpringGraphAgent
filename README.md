@@ -1,7 +1,7 @@
 <h1 align="center">Stringer</h1>
 
 <p align="center">
-  <strong>在现有 Java 应用里跑一个可运维的 AI Agent 运行时。<br>引入一个 starter，编排、工具治理、知识库、管控台都不用自己写。</strong>
+  <strong>Java 生态的 AI Agent 运行时中间件。<br>引一个 starter：注入 AgentService 就能调 AI，方法上加 @StringerTool 就能让 AI 调你。编排、工具治理、知识库、管控台都在服务端。</strong>
 </p>
 
 <p align="center">
@@ -17,51 +17,38 @@
 
 ---
 
-## 这是什么
+## ✨ 为什么选择 stringer？
 
-Stringer 是 **Java 生态的 Agent 运行时中间件**，交付形态与 Redis、Nacos 一致：**独立服务端 + 薄客户端 starter**。
-
-- **服务端（`stringer-server`）** —— 一个可独立部署的 jar。编排、工具路由、知识库、会话记忆、模型接入、管控台全在这里，端口 9527。
-- **starter（`stringer-spring-boot-starter`）** —— 消费侧唯一需要的坐标，引一个就够。注入 `AgentService`，像调用本地方法一样发起一轮 Agent 对话；同时带出工具实例 SDK（把本进程的方法交给 Agent 调用，默认关闭）与公共异常 / 输入安全。
-- **工具实例 SDK（`stringer-tool-instance`）** —— 工具不必写在业务进程里。任何进程（含非 Java 应用）按 HTTP 协议注册到服务端，即可被 Agent 调用，零 Stringer 依赖。已随 starter 传递，纯工具方可单独引入。
-
-**一句话：库给你积木，平台让你搬家，Stringer 让你留在原地。**
-
-## 为什么需要它
-
-把 Agent 能力做进一个已有 Java 系统，真正的工作量不在"调模型"：
-
-| 自己拼 | 用 Stringer |
+| 能力 | 具体到能做什么 |
 | --- | --- |
-| 选一个编排库，自己定义节点、分支、状态 | 图编排 + 状态持久化已就绪，支持中断与恢复 |
-| 自己接 Redis 存检查点、定义过期策略、处理反序列化 | 检查点与记忆按会话隔离，自动过期 |
-| 自己拼向量检索 + 关键词检索 + 分数融合 | 混合检索与重排是配置项，不是代码 |
-| 自己设计工具注册、多实例保活、下线摘除 | 注册中心式心跳，实例上下线自动生效 |
-| 自己判断"这个工具该不该给模型看见" | 域（profile）一处声明，模型视野自动收敛 |
-| 自己实现"退款这类操作要先问人" | 声明审批策略即得中断-恢复链路 |
-| 运维问"现在有哪些工具、哪些实例、谁在跑" | 内置 8 页管控台 |
-| 上面每一条出问题，都算在你头上 | 它们是中间件的事，你只写自己的工具 |
-
-这些代码与业务无关，但每一条出问题都算在业务方头上。Stringer 把它们收进中间件。
+| **图编排状态机** | 每一步显式可控（`agent → 条件路由 → tools/review → agent`），状态透明、可中断、可恢复 |
+| **人工审批（HITL）** | 工具声明审批策略后，调用前自动中断等待确认；中断点落 Redis，**服务端重启后仍可恢复** |
+| **域（profile）可见性** | 一次对话必须声明所处的域，模型只能看到该域的工具、只能拿到该域的提示词；域不存在直接报错，**绝不静默降级成全量工具** |
+| **远程工具注册中心** | 工具实例周期整包上报声明，服务端按实例维护副本；实例掉线自动摘除、重连自动恢复，同名工具多实例可同时在线 |
+| **实例可用性管控** | 在线实例页可对单个实例**静音（熔断）/ 恢复 / 强制下线**：静音即摘除该实例上报的全部工具副本，不必去改动它所在的进程；强制下线的实例会收到 410 并停止心跳 |
+| **混合检索** | 向量检索与关键词检索并行执行，归一化后加权融合；切片按中文章节边界切分并携带来源元数据 |
+| **知识库上传与重建** | 管控台直接上传文档（默认 `md` / `txt`，扩展名白名单可配），可查看导入状态与整库重建索引；ES 缺 IK 分词器会在「存储配置」的测试连接里判读出来（可用 / 确认未安装 / 未探测三态） |
+| **双约束会话记忆** | 同时约束消息条数与 Token 估算，按会话隔离存储 |
+| **流式输出与中断** | 事件流逐帧下发；任务可随时停止 |
+| **内置管控台** | 8 页：概览、模型设置、存储配置、域空间、在线实例、提示词设定、知识库、账号 |
+| **运行指标快照** | `GET /admin/metrics` 返回注册工具数、运行中会话数、堆内存与内核指标快照，可接进现有监控采集（管理面，需凭证） |
+| **零配置可启动** | 未填 ES / Redis / 模型也能启动，缺配置只在**调用时**报明确错误并指向该去哪一页填 |
 
 ## 与主流方案相比
 
-| 维度 | Stringer | Dify / FastGPT | Spring AI / LangChain4j | LangGraph4j |
-| --- | --- | --- | --- | --- |
-| 形态 | **独立服务端 + 薄 starter** | 独立平台（容器编排部署） | 库，随业务进程 | 库 |
-| 技术栈 | Java 21 / Spring Boot | Python 为主 | Java | Java |
-| 嵌入现有 Java 应用 | 引 starter、注入 Bean；业务代码零改动 | 另起一套进程，走 REST / iframe | 业务代码里手写编排 | 业务代码里手写状态与持久化 |
-| 编排与状态 | 图编排 + Redis 检查点，**中断后可跨实例恢复** | 可视化工作流 | 需自行实现 | 提供图，持久化接入自行实现 |
-| 工具治理 | **域可见性 + 审批中断 + 多实例注册中心** | 插件 / 工具市场 | 无 | 无 |
-| 运维界面 | 内置 8 页管控台 | 内置可视化界面 | 无 | 无 |
-| 与业务共用 ES / Redis | 命名空间隔离，**可同一套实例** | 独立存储 | 取决于业务侧实现 | 取决于业务侧实现 |
-| 定位 | Agent 运行时（可运维） | AI 应用搭建平台 | 开发库 | 编排库 |
-
-选择建议：
-
-- 要**无代码拖拽搭应用** → 去 Dify / FastGPT。
-- 只是**调几次模型 API** → 直接用厂商 SDK，不必上中间件。
-- 要**把 Agent 嵌进已有 Java 微服务**、工具分散在多个服务里、还要能被人审计和干预 → 这是 Stringer 的位置。
+| 维度 | Stringer | Dify / FastGPT | Spring AI / LangChain4j |
+| --- | --- | --- | --- |
+| 形态 | **独立服务端 + 薄 starter** | 独立平台（容器部署） | 库，随业务进程 |
+| 技术栈 | Java 21 / Spring Boot | Python 为主 | Java |
+| 工具怎么写 | 你现有的 Spring Bean：方法上加 `@StringerTool` | 平台内配置 / 插件市场 | 写代码，自己接路由 |
+| 工具在哪跑 | **你的进程内**，复用事务、权限与 `@Service` | 平台进程，跨系统 HTTP 调用 | 你的进程内 |
+| 业务代码改动 | 注入 `AgentService` 调 AI 即可，零改动 | 另起进程，走 REST / iframe | 编排与状态代码写进业务工程 |
+| 编排与状态 | 图编排 + Redis 检查点，**中断后可跨实例恢复** | 可视化工作流 | 需自行实现 |
+| 工具治理 | **域可见性 + 审批中断 + 多实例注册中心** | 插件 / 工具市场 | 无内置治理，需自行实现 |
+| 运维界面 | 内置 8 页管控台 + 运行指标快照 | 自有可视化界面 | 无 |
+| 存储 | 命名空间隔离，**可与业务共用同一套 ES / Redis** | 独立存储 | 取决于业务侧实现 |
+| 部署成本 | 需多跑一个服务端（ES / Redis 可与业务复用） | 需独立平台及其依赖 | 无额外部署 |
+| 适合 | 已有 Java 微服务、工具分散、需人工审批与可运维 | 无代码拖拽搭应用 | 只调几次模型 API |
 
 ## 适合谁 / 不适合谁
 
@@ -71,40 +58,14 @@ Stringer 是 **Java 生态的 Agent 运行时中间件**，交付形态与 Redis
 
 ## 部署形态：一个 jar，跑遍各端
 
-Stringer 服务端是**平台无关的单文件 fat jar**：一份构建产物，在 Linux、Windows、 macOS（含其他 Unix 类）上直接 `java -jar` 即可运行，无需为目标系统重新构建。这与"中间件"的定位一致——像 Redis、Nacos 一样，拿到二进制就能跑。
+Stringer 服务端是**平台无关的单文件 fat jar**：一份构建产物，在 Linux、Windows、 macOS（含其他 Unix 类）上直接 `java -jar` 即可运行，无需为目标系统重新构建。
 
-- **启动期自动探测运行系统**：`RuntimeEnvironment` 在 Spring 装配前用 `System.getProperty("os.name")` 判定 OS 族，自动选定配置 / 日志目录并提前建好，不再写死 Linux 路径。
+- **启动期自动探测运行系统**：`RuntimeEnvironment` 在 Spring 装配前用 `System.getProperty("os.name")` 判定 OS 族，自动选定配置 / 日志目录并提前建好。
   - Linux / 其他 Unix：`/var/lib/stringer/config`、`/var/log/stringer`
   - Windows：`%ProgramData%\Stringer\config`、`%ProgramData%\Stringer\logs`
   - macOS：`/Library/Application Support/Stringer/config`、`/Library/Logs/Stringer`
 - **覆盖优先级**：命令行 `--key` ＞ JVM 系统属性 `-Dkey` ＞ 环境变量 `STRINGER_SETTINGS_PATH` / `STRINGER_LOG_PATH` ＞ 平台默认。
 - **容器部署**：Docker / K8s 只需换对应基底镜像（如 `eclipse-temurin:21-jre`），jar 不变；容器运行时（kubernetes / docker / podman）会在启动横幅中显示，便于排障。
-
-### 相比 Python 部署的优势
-
-| 维度 | Stringer（Java fat jar） | 典型 Python 部署 |
-| --- | --- | --- |
-| 分发 | 单文件 jar，构建一次到处跑 | 常需 lock 文件 + 虚拟环境 + 解释器版本对齐 |
-| 依赖 | 全部打进 jar，无运行时依赖地狱 | 系统 / 用户 site-packages 易冲突，需 venv 隔离 |
-| 跨平台 | 字节码一次编译，各 OS 行为一致 | C 扩展（numpy / torch 等）需按平台预编译 wheel |
-| 启动 | JVM 预热后即稳定，无需运行时联网拉包 | 冷启动常伴随 `pip install` 或镜像层下载 |
-| 类型与可维护性 | 强类型、编译期检查，重构安全 | 动态类型，大型项目易在运行时才暴露类型错 |
-| 并发 | 工业级多线程，无 GIL 瓶颈 | CPython 受 GIL 限制，CPU 密集需多进程 |
-| 内存可控 | 堆内存可显式约束（`-XX:MaxRAMPercentage`） | 引用计数 + GC，长驻内存不易预估 |
-
-## 核心能力
-
-| 能力 | 具体到能做什么 |
-| --- | --- |
-| **图编排状态机** | 每一步显式可控（`agent → 条件路由 → tools/review → agent`），状态透明、可中断、可恢复 |
-| **人工审批（HITL）** | 工具声明审批策略后，调用前自动中断等待确认；中断点落 Redis，**服务端重启后仍可恢复** |
-| **域（profile）可见性** | 一次对话必须声明所处的域，模型只能看到该域的工具、只能拿到该域的提示词；域不存在直接报错，**绝不静默降级成全量工具** |
-| **远程工具注册中心** | 工具实例周期整包上报声明，服务端按实例维护副本；实例掉线自动摘除、重连自动恢复，同名工具多实例可同时在线 |
-| **混合检索** | 向量检索与关键词检索并行执行，归一化后加权融合；切片按中文章节边界切分并携带来源元数据 |
-| **双约束会话记忆** | 同时约束消息条数与 Token 估算，按会话隔离存储 |
-| **流式输出与中断** | 事件流逐帧下发；任务可随时停止 |
-| **内置管控台** | 8 页：概览、模型设置、存储配置、域空间、在线实例、提示词设定、知识库、账号 |
-| **零配置可启动** | 未填 ES / Redis / 模型也能启动，缺配置只在**调用时**报明确错误并指向该去哪一页填 |
 
 ## 快速开始
 
@@ -116,6 +77,21 @@ Stringer 服务端是**平台无关的单文件 fat jar**：一份构建产物�
 - 一个 OpenAI 兼容的模型服务（对话模型 + 向量模型）
 
 > ES / Redis **可与业务系统共用同一套实例**：数据层通过私有命名空间隔离（Redis key 统一 `stringer:` 前缀、ES 索引统一 `stringer_` 前缀），双方各自建立独立连接，互不影响。
+
+模型服务只要是 **OpenAI 兼容端点**就行，公有云与本地部署没有区别——**本机 Ollama 直接可用**
+
+| 「模型设置」页字段 | 本机 Ollama 的填法 |
+| --- | --- |
+| 对话 · 服务商地址 | `http://localhost:11434/v1`（**必须带 `/v1`**） |
+| 对话 · API Key | 任意非空值，如 `ollama`（Ollama 不校验，但本系统要求该字段非空） |
+| 对话 · 模型名 | `qwen2.5:7b`、`llama3.1:8b` 等本地已有模型；地址填对后下拉可直接拉到列表 |
+| 向量 · 模型名 | `nomic-embed-text`、`bge-m3` 等 |
+| 向量 · 维度 | **留空**：Ollama 的 `/v1/embeddings` 不接受 OpenAI 的 `dimensions` 参数，填了会被忽略 |
+
+两点提醒：
+
+- **对话模型需支持工具调用（function calling）**（如 `qwen2.5`、`llama3.1`）。不支持时 Agent 仍能对话，但不会调用你注册的工具。
+- 换了向量模型、维度随之一变时，ES 索引的维度是建索引时定死的，需在「知识库」页**重建索引**；服务端跑在容器里时 `localhost` 指容器自身，要写宿主地址。
 
 ### 第一步：启动服务端
 
@@ -159,14 +135,14 @@ stringer:
 >
 > 凭证不设有效期，正常路径下登录只发生一次；服务端改过密码后客户端会自动重登一次，仍失败则中断启动并提示原因。
 
-### 第三步：发起一轮对话
+### 第三步：注入一个 Bean，发起一轮对话
 
 ```java
 @Service
 public class MyService {
     private final AgentService agentService;
 
-    public MyService(AgentService agentService) {
+    public MyService(AgentService agentService) {   // starter 自动装配，不需要任何注解
         this.agentService = agentService;
     }
 
@@ -176,25 +152,33 @@ public class MyService {
 }
 ```
 
-第三个参数是**域**：平台据此决定模型能看到哪些工具、用哪份提示词。域由工具声明即创建，不需要预先注册：
+第三个参数是**域**：平台据此决定模型能看到哪些工具、用哪份提示词。
 
-```java
-@StringerTool(name = "queryOrder", description = "查询订单详情", profiles = {"customer"})
-public String queryOrder(String orderNo) { ... }
+### 第四步：方法上加个注解，把业务方法变成工具
+
+打开 `stringer.tool-instance.enabled=true`，然后在任意 Spring Bean 的方法上声明：
+
+```java 示例
+// 只读工具：客服域可见，参数 schema 由方法签名推导
+@StringerTool(name = "queryOrder", description = "按订单号查询订单状态。用户追问发货/物流时调用",
+        profiles = {"customer"})
+public String queryOrder(@ToolParam(description = "订单号，如 FR2024001") String orderNo) { ... }
+
+// 写操作：声明副作用等级 + 调用前中断等人工确认
+@StringerTool(name = "refundOrder", description = "按订单号退款。仅在用户明确要求退款时调用",
+        profiles = {"admin"}, sideEffect = StringerTool.SideEffect.WRITE)
+@ToolPolicy(approval = @ToolPolicy.Approval(mode = Mode.ALWAYS, reason = "退款需人工确认"))
+public String refundOrder(@ToolParam(description = "订单号") String orderNo,
+                          @ToolParam(description = "退款金额，单位：元") BigDecimal amount) { ... }
 ```
 
-审批也只有一行：
+方法签名即参数 schema、注解即治理策略、方法体即执行逻辑——三件事写在同一个地方。工具清单需要在启动期动态拼装时，改用 `ToolInstanceContributor` 编程式注册（重名以编程式为准），见[实例文档 §4.4](docs/INSTANCE.md#44-声明工具编程式工具清单要在启动期动态拼装时用)。
 
-```java
-@ToolPolicy(approval = @Approval(mode = Approval.Mode.ALWAYS, reason = "退款需人工确认"))
-public String refundOrder(String orderNo, BigDecimal amount) { ... }
-```
-
-> 域是**调用方自行声明、平台信任**的治理机制（防止模型误用工具、防止提示词与工具集错位），**不是安全边界**——用哪个域由客户端决定，平台无法验证真伪。终端用户的身份与授权属于宿主自己的 IAM。
+> 域由工具声明即创建，不需要预先注册；它也是**调用方自行声明、平台信任**的治理机制（防止模型误用工具、防止提示词与工具集错位），**不是安全边界**——用哪个域由客户端决定，平台无法验证真伪。终端用户的身份与授权属于宿主自己的 IAM。
 
 ### 联调示例
 
-仓库内置 `stringer-example`（客户端接入示例，端口 8080，自带 4 个演示工具并以"工具实例"身份注册给服务端）：
+仓库内置 `stringer-example`（客户端接入示例，端口 8080，自带 6 个演示工具——全部用 `@StringerTool` 声明——并以"工具实例"身份注册给服务端）：
 
 ```bash
 mvn -pl stringer-example spring-boot:run
@@ -224,12 +208,12 @@ stringer-server
 | --- | --- |
 | `stringer-api` | 对外契约：`AgentService` / 注解 / 事件 / 工具描述符 / 错误码 |
 | `stringer-common` | 公共支撑：异常体系 / 输入安全 |
-| `stringer-domain` | 领域能力：知识检索 / 混合重排 / 记忆策略 |
+| `stringer-domain` | 领域能力：知识检索 / 混合检索与融合排序 / 记忆策略 |
 | `stringer-infrastructure` | 基础设施：ES 检索与索引管理 / 文档摄取切片 / Redis / 向量化 |
 | `stringer-runtime` | Agent 运行时内核：图编排 / 工具注册表与路由 / 实例注册表 / 流式 / 提示词 |
 | `stringer-server` | **服务端**：可独立部署，承载全部重逻辑与管控台 |
 | `stringer-spring-boot-starter` | **消费侧唯一坐标**：远程调用 + 工具实例 SDK + 公共异常与输入安全 |
-| `stringer-tool-instance` | **工具实例 SDK**：注册与心跳保活 + 工具调用端点，零 Stringer 依赖（随 starter 传递） |
+| `stringer-tool-instance` | **工具实例 SDK**：注册与心跳保活 + 工具调用端点，只依赖契约层 `stringer-api`，不含内部实现（随 starter 传递） |
 | `stringer-example` | 接入示例与联调 |
 
 ## 接口
@@ -245,7 +229,7 @@ stringer-server
 | POST | `/api/agent/stop/{sessionId}` | 停止执行中的任务 |
 | POST | `/api/agent/tools/register` | 工具实例注册与心跳 |
 
-完整端点、SSE 事件契约、错误码总表、SDK 用法见 [API 文档](docs/API.md)。
+管控台调用的管理面（`/admin/*`：设置、模型、域空间、实例静音与下线、知识库上传与重建、指标快照、账号）不在上表内，完整端点、SSE 事件契约、错误码总表、SDK 用法见 [API 文档](docs/API.md)。
 
 ## 文档
 

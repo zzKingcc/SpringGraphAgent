@@ -23,32 +23,6 @@ import java.util.Map;
 
 /**
  * 联调用的 Agent HTTP 入口（示例层，仅一层 Controller）
- *
- * <p><strong>仅供本地联调与自测，不是交付物。</strong>企业系统接入请直接注入
- * {@link AgentService}（配置见 {@code README.md} 的「客户端配置」一节），
- * 在自己的 Controller 中叠加鉴权、租户校验、统一响应体与审计日志。</p>
- *
- * <p>端点分两组：</p>
- * <ul>
- *   <li>事件流端点：{@code POST /chat}、{@code POST /resume}、{@code POST /stop/{sessionId}}，返回 {@link AgentEvent}</li>
- *   <li>遗留文本端点：{@code GET /{sessionId}/{message}}、{@code GET /resume/{sessionId}}，
- *       仅服务 {@code test.html}，随该页面一起下线</li>
- * </ul>
- *
- * <h2>域场景（本示例的重点）</h2>
- * <p>{@code test.html} 上有两个对话框，分别扮演两种调用方：</p>
- * <ul>
- *   <li><b>客服</b> —— {@code profile = "customer"}：{@code queryWeather}（全域可见）+ {@code queryOrder}</li>
- *   <li><b>管理员</b> —— {@code profile = "admin"}：{@code queryWeather}（全域可见）+
- *       {@code businessReport} + {@code closeOrder}（写操作，需二次确认）</li>
- * </ul>
- * <p><b>这几个工具由本示例自己提供</b>（{@code example.tools.ExampleToolContributor}），通过
- * {@code stringer-tool-instance} SDK 周期整包注册给服务端——服务端不自带任何示例工具，
- * 不注册就等于 0 个工具、任何 profile 都会被判 {@code 10004}。于是本示例一次跑通三层链路：
- * 客户端调用 → 服务端编排 → 回调本进程执行工具。</p>
- * <p>域通过 {@code scenario} 查询参数由前端逐次指定，服务端据此构造 {@link AgentRequest}。
- * 这正是"平台只给 {@code AgentService}、Controller 交给接入方自己写"的价值所在：
- * 接入方能按自己的身份体系（SecurityContext / 登录态 / 角色表）决定每个请求属于哪个域。</p>
  * @author zzkingcc
  */
 @CrossOrigin

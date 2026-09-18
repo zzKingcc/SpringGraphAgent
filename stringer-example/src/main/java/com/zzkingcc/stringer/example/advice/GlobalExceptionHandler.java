@@ -21,15 +21,6 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * 示例层全局异常处理器
- *
- * <p>设计要点：
- * <ul>
- *   <li>所有异常统一以 <b>ERROR</b> 级别写入日志并输出到控制台（完整堆栈）；</li>
- *   <li>响应体统一携带 {@code code}（业务状态码）+ {@code codeName}（枚举名）+ {@code error} + {@code detail} + {@code timestamp}；</li>
- *   <li>业务异常直接复用 {@link ErrorCode}，不散落 magic number；</li>
- *   <li>{@link CancellationException} 为用户主动中断，属正常流程，仅 WARN 且不计入服务错误。</li>
- * </ul>
- * </p>
  * @author zzkingcc
  */
 @RestControllerAdvice

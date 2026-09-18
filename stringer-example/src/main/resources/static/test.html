@@ -246,8 +246,8 @@
             S[scene].sid = crypto.randomUUID();
             const isAdmin = scene === 'admin';
             addSys(scene, isAdmin
-                ? '🛡️ 管理域会话已就绪。可用工具：queryWeather（全域）、businessReport、closeOrder（关单需二次确认）。'
-                : '🙋 客服域会话已就绪。可用工具：queryWeather（全域）、queryOrder。经营类工具不在视野内。');
+                ? '🛡️ 管理域会话已就绪。可用工具：queryWeather（全域）、businessReport、closeOrder / updateDeliveryPhone（写操作，需二次确认）。'
+                : '🙋 客服域会话已就绪。可用工具：queryWeather（全域）、queryOrder、queryLogistics。经营类工具不在视野内。');
             const ta = el(scene, 'input');
             ta.addEventListener('keydown', e => {
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(scene); }

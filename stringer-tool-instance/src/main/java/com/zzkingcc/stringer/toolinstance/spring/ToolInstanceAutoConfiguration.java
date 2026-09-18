@@ -5,6 +5,7 @@ import com.zzkingcc.stringer.toolinstance.ToolInstanceConfig;
 import com.zzkingcc.stringer.toolinstance.ToolInstanceContributor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -41,18 +42,26 @@ public class ToolInstanceAutoConfiguration {
     public ToolInstanceClient toolInstanceClient(ServerProperties server,
                                                 ToolInstanceProperties properties,
                                                 Environment environment,
+                                                ListableBeanFactory beanFactory,
                                                 ObjectProvider<ToolInstanceContributor> contributors) {
         ToolInstanceConfig config = properties.toConfig(server, resolveEndpoint(properties, environment));
         ToolInstanceClient client = new ToolInstanceClient(config);
 
+        // ① 注解式：方法上的 @StringerTool 直接成为工具
+        int annotated = 0;
+        if (properties.isScanAnnotated()) {
+            annotated = new AnnotatedToolScanner(beanFactory).registerTo(client);
+        }
+
+        // ② 编程式：ToolInstanceContributor 后注册，重名时覆盖注解声明（显式优先于扫描）
         int count = 0;
         for (ToolInstanceContributor contributor : contributors) {
             contributor.contribute(client);
             count++;
         }
 
-        log.info("[工具实例] {} 已装配：{} 个贡献者、{} 个工具，服务端 {}，回流地址 {}",
-                config.instanceId(), count, client.toolNames().size(),
+        log.info("[工具实例] {} 已装配：{} 个工具（注解扫描 {} 个、贡献者 {} 个），服务端 {}，回流地址 {}",
+                config.instanceId(), client.toolNames().size(), annotated, count,
                 config.serverUrl(), config.endpoint());
         warnIfEndpointPathMismatch(config);
         return client;

@@ -13,7 +13,7 @@ stringer:
   tool-instance:
     enabled: true
     instance-id: ${STRINGER_INSTANCE_ID:example-8080}
-    # 回流地址留空即按本进程端口推导（本示例与服务端同机）。跨机部署、反代时必须显式配置：
+    # 回流地址留空即按本进程端口推导（本示例与服务端同机）。跨机部署、想走反代时必须显式配置：
     # endpoint: ${STRINGER_INSTANCE_ENDPOINT:http://10.0.0.5:8081/stringer/invoke}
     heartbeat-interval-seconds: 10
 

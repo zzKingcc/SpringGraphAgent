@@ -30,7 +30,7 @@ Stringer 是面向 **AI Agent 编排与工具治理** 的中间件，交付形�
 | --- | --- | --- |
 | `stringer-api` | 对外契约：错误码、注解、`ToolDescriptor`、`AgentRequest`/`CallerContext`/`AgentEvent`、`TraceId`、`AgentService` 接口 | `api.code` `api.annotation` `api.tool` `api.agent` `api.support` |
 | `stringer-common` | 异常基类与通用工具 | `common.exception` `common.util` |
-| `stringer-domain` | 领域能力：知识检索、混合重排、会话记忆约束 | `domain.capability.knowledge` `domain.rag` `domain.memory` |
+| `stringer-domain` | 领域能力：知识检索、混合检索与融合排序、会话记忆约束 | `domain.capability.knowledge` `domain.rag` `domain.memory` |
 | `stringer-infrastructure` | 外部依赖适配：ES 检索器与索引管理、文档摄取与切片、Redis 记忆与检查点、向量化 | `infrastructure.elasticsearch` `infrastructure.ingestion` `infrastructure.redis` `infrastructure.embedding` |
 | `stringer-runtime` | 运行时内核：编排图、工具注册表与路由、实例注册表、流式上下文、提示词解析、取消 | `runtime.graph` `runtime.tool` `runtime.stream` `runtime.prompt` `runtime.cancellation` `runtime.orchestration` |
 | `stringer-server` | 服务端：配置装配、管控接口、鉴权、设置存储、异常处理出口、静态管控台 | `server.config` `server.controller` `server.auth` `server.settings` `server.knowledge` `server.advice` `server.prompt` |
@@ -124,7 +124,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 实际生效范围（当前实现）：
 
-- 使用前提：工具所在类实现 `StringerToolProvider` 并注册为 Spring Bean，才会被 `AnnotatedToolScanner` 扫描。
+- 生效范围：任意 Spring Bean 的方法上有 `@StringerTool` 即被 `AnnotatedToolScanner` 扫描（服务端进程内与工具实例 SDK 两侧规则一致）。`StringerToolProvider` 退化为可选标记：实现了照样被扫到，不再是使用前提。
 - 参数结构由反射推导（`String`/`int`/`boolean`/`enum`/`List<T>`/`record DTO` → JSON Schema 的 `type`/`properties`/`required`），注解只补语义。
 - 审批判定只看 `Approval.mode` 是否非 `NONE`；`CONDITIONAL` 与 `ONCE_PER_SESSION` 当前与 `ALWAYS` 等价。
 - 仅登记、不参与运行行为：`idempotent`、`toModel`、`sensitive`、`condition`、`approverRoles`、`timeoutSeconds`、`onTimeout`、`payloadFields`。
@@ -133,7 +133,7 @@ ServerAgentController ──► AgentOrchestrationService ──► agentExecuto
 
 | 来源 | 触发时机 | 注册路径 | 副本表示 |
 | --- | --- | --- | --- |
-| 本地 Bean | 启动期扫描 | `StringerToolProvider` → `AnnotatedToolScanner` | 单元素 `local` |
+| 本地 Bean | 启动期扫描 | Spring Bean（可选实现 `StringerToolProvider`）→ `AnnotatedToolScanner` | 单元素 `local` |
 | 远程实例 | 运行期整包心跳 | `POST /api/agent/tools/register` | `instanceId` + `endpoint` |
 
 两个来源写入同一个内存注册表 `ToolRegistry`；注册表不落盘。本地工具与远程工具对模型和管控台完全透明。

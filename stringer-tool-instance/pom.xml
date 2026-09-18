@@ -16,6 +16,12 @@
         工具实现在这里、工具治理在服务端 —— 两者进程分离，工具实例不依赖 Stringer 任何内部模块。</description>
 
     <dependencies>
+        <!-- ===== 对外契约层：@StringerTool / @ToolPolicy / @ToolParam 注解声明 =====
+             只取注解与契约类型，不依赖任何 Stringer 内部实现模块 -->
+        <dependency>
+            <groupId>com.zzkingcc</groupId>
+            <artifactId>stringer-api</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -35,6 +41,11 @@
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-web</artifactId>
+        </dependency>
+        <!-- 注解扫描要用 BeanFactory / ClassUtils / 参数名发现，直接使用故显式声明 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
         </dependency>
     </dependencies>
 </project>
